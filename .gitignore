@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# LibreOffice 가 CSV 를 열어 둔 동안 만드는 잠금 파일
+.~lock.*#
+# gps_mapper.py 가 find_wc 로 긴 기록을 열 때 이 폴더에 만드는 임시 HTML
+gps_mapper_find_wc.html

@@ -1,0 +1,2 @@
+latitude,longitude,heading,speed,steer,direction,pitch,terrain,throttle_pulse,wheel_pulse,wheel_speed,steer_measured,throttle_raw,auto_mode,estop,gps_quality,gps_sigma_m,latitude2,longitude2,speed2,gps_quality2,gps_sigma_m2,num_sv,num_sv2,hmsl_m,hmsl2_m,itow_ms,t_rel,baseline_m,baseline_deg,rx_dt_ms
+36.96787110,127.87270320,0.00,0.019,0,0,0.00,0,0,0.0,0.000,0,0,0,0,5,0.044,36.96786220,127.87271850,0.033,5,0.078,30,24,100.899,99.977,221926800,0.0,1.683,126.1,-15.6

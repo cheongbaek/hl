@@ -29,7 +29,7 @@ CSV 형식 : 두 모드가 같다. 앞 15열은 white1/mapping.py 와 ★열 이
   매핑 : ★일정 거리마다 한 점★ (시간 간격이 아니라) — 기본 0.25 m, 창에서 조절.
     신호 대기처럼 멈춰 있는 동안 같은 자리가 수백 줄 쌓이면 경로가 아니라 점 뭉치가 되기
     때문이다(mapping.py 와 같은 규칙). 매핑 중에도 간격을 바꿀 수 있다.
-  검증 : ★일정 시간마다 한 점★ — 기본 1 초, 0.2~60 초, 0.1 초 단위.
+  검증 : ★일정 시간마다 한 점★ — 기본 0.1 초(= 출력 주기 그대로, 모든 측위를 남긴다), 0.1~60 초, 0.1 초 단위.
     수신기가 NAV-PVT 를 10 Hz 로 내므로 0.1 초가 최소 단위다. 간격은 PC 시계가 아니라 NAV-PVT 의
     iTOW(수신기 GPS 시각, ms)로 잰다 — USB 로 들어오는 시점이 들쭉날쭉해도 기록 간격은 흔들리지
     않는다. 기록 중에는 간격을 바꿀 수 없다(한 파일 안에서 간격이 섞이면 시각 열이 없어 나중에
@@ -51,6 +51,15 @@ GPS 자동 감지 : u-blox USB VID(0x1546)인 시리얼 포트만 고른다(Wind
   여기에 ★NAV-PVT 10 Hz★ 를 켠다 — 위치(1e-7° ≈ 1.1 cm), 지면속도, hAcc, RTK 상태를
   한 메시지로 준다(GGA 위도는 1.9 cm 단위로 끊긴다). GGA 는 VRS 캐스터에 현재 위치를
   올리는 데만 쓴다.
+
+기지국 : 받은 RTCM 을 수신기에 넣으면서 따로 엿봐 창의 '기지국' 줄에 보인다(RtcmMonitor).
+  · 1005/1006 — 기준국 ID · 위치. VRS 는 '계산된 기준국'으로 표시돼 오고(DF141), 접속할 때마다 ID 가 바뀌며
+    올린 GGA 자리에 생긴다 — 그래서 '여기서 몇 m'가 0 에 가깝다.
+  · 1032 — 그 VRS 를 만든 ★실제 기준국★ ID · 위치. 국토지리정보원 위성기준점 표(NGII_STATIONS)와 맞춰
+    이름을 붙인다(2026-10-13 충주 대소원면: ID 10 = GSAN 괴산, 18.5 km).
+  · 1033 — 기준국 수신기 · 펌웨어 · 일련번호, 1014 — 네트워크 주 · 보조 기준국(오면).
+  · MSM 메시지 번호(107x GPS, 108x GLONASS, 109x Galileo, 111x QZSS, 112x BeiDou)로 보정에 든 위성계를 안다.
+  해독이 실패해도 보정은 이미 수신기로 간 뒤라 RTK 에는 영향이 없다.
 
 경로 확인 : 목록에서 CSV 를 누르면 find_wc(카카오 위성지도)가 그 기록을 바로 그린다.
   CSV 를 gzip → base64url 로 URL 프래그먼트(#csvgz=…&name=…)에 싣는다 — find_wc 의
@@ -133,12 +142,43 @@ NTRIP = {
     "password": "ngii",
 }
 
+# 기지국 정보 (RtcmMonitor)
+RTCM_RECENT_SEC = 15         # 이보다 오래전에 마지막으로 받은 메시지는 '지금 받는 중'에서 뺀다
+NGII_MATCH_M = 50            # 1032 의 실제 기준국이 이 거리 안이면 그 위성기준점으로 본다
+# 국토지리정보원 위성기준점 92곳 (코드, 위도, 경도). ITRF2020 성과(KGRF20_NGII.CRD, 2025-02 공개)의 지구중심 좌표를
+# GRS80 위경도로 바꾼 값 — 1032 로 받은 실제 기준국에 이름을 붙이는 데만 쓴다. 코드의 한글 이름은 성과에 없다.
+NGII_STATIONS = (
+    ("ANSG", 37.01215, 127.26579), ("BOEN", 36.48837, 127.73027), ("BONH", 36.94401, 128.91452), ("BSNG", 34.89295, 127.13498),
+    ("CCSB", 37.94757, 127.75493), ("CHEN", 36.87801, 127.15526), ("CHJU", 33.51393, 126.52982), ("CHLW", 38.16448, 127.41525),
+    ("CHNG", 35.53331, 128.47806), ("CHSG", 36.43563, 129.05635), ("CHUL", 38.27327, 127.14522), ("CHWN", 35.23612, 128.69300),
+    ("CHYG", 36.45890, 126.80150), ("CNJU", 36.62689, 127.46123), ("DANJ", 36.89242, 126.82305), ("DOND", 37.90205, 127.06074),
+    ("DONH", 37.50698, 129.12421), ("GANH", 37.71938, 126.39024), ("GHDG", 35.27054, 128.98509), ("GOCH", 35.66790, 127.94334),
+    ("GOHG", 34.56579, 127.25801), ("GOJE", 34.72179, 128.59087), ("GOSG", 34.98066, 128.30771), ("GSAN", 36.81616, 127.78679),
+    ("GYJU", 35.75545, 129.03908), ("GYOI", 35.67360, 129.28862), ("HADG", 35.16242, 127.70924), ("HCHN", 38.30809, 127.67955),
+    ("HCSN", 38.06291, 127.52425), ("HONC", 37.70916, 128.19433), ("ICHN", 37.11740, 127.61304), ("IMJA", 35.08702, 126.11996),
+    ("INCH", 37.41986, 126.68644), ("INJE", 38.06946, 128.17080), ("JAHG", 34.67535, 126.89958), ("JANS", 35.64163, 127.52224),
+    ("JECH", 36.90977, 128.16592), ("JIND", 34.47199, 126.32374), ("JINJ", 35.17309, 128.04968), ("JSUN", 37.36938, 128.68464),
+    ("JUNG", 35.62277, 126.97403), ("JUNJ", 35.84345, 127.13513), ("KANR", 37.77093, 128.86823), ("KIMC", 36.13740, 128.14230),
+    ("KUNW", 36.23348, 128.57424), ("KUSN", 36.00547, 126.76155), ("KWNJ", 35.17837, 126.91024), ("MUAN", 34.81743, 126.46623),
+    ("MUJU", 36.00329, 127.66118), ("MYSO", 35.50179, 128.81577), ("NAMH", 34.72388, 127.98167), ("NAMW", 35.42305, 127.39618),
+    ("NAMY", 37.71999, 127.30004), ("NSAN", 36.19416, 127.11233), ("OJBU", 37.75487, 127.10667), ("PAJU", 37.74641, 126.73790),
+    ("PCHN", 37.53467, 128.44605), ("PJMS", 37.88604, 126.76622), ("POCN", 38.01858, 127.19097), ("POHC", 35.91014, 129.40295),
+    ("PSJA", 35.38219, 129.24874), ("PUSN", 35.23394, 129.07485), ("SEJN", 36.52221, 127.30319), ("SEOS", 36.77641, 126.49421),
+    ("SIAN", 34.78689, 126.14815), ("SMAN", 35.73027, 126.52794), ("SNJU", 36.37916, 128.14448), ("SONC", 34.95748, 127.48614),
+    ("SOUL", 37.61855, 127.09835), ("SSAN", 33.46780, 126.90472), ("SUNJ", 35.91408, 128.25613), ("SUWN", 37.27551, 127.05424),
+    ("TABK", 37.16364, 128.98608), ("TEGN", 35.90631, 128.80197), ("WNDO", 34.33537, 126.74283), ("WNJU", 37.33721, 127.94709),
+    ("WOLS", 35.50395, 129.41602), ("WSJG", 35.56568, 129.31705), ("WSSN", 35.54542, 129.11897), ("WULJ", 36.99198, 129.41300),
+    ("YANJ", 37.69689, 126.93163), ("YANP", 37.45419, 127.50563), ("YCHG", 35.98087, 129.10643), ("YCIG", 36.05278, 129.04002),
+    ("YCMP", 35.97294, 128.92693), ("YDKG", 36.36295, 129.39044), ("YECH", 36.65146, 128.44634), ("YEOJ", 37.27857, 127.57831),
+    ("YODK", 36.53346, 129.40905), ("YONK", 35.27858, 126.51647), ("YOWL", 37.18252, 128.46182), ("YYAN", 38.10510, 128.64040),
+)
+
 UBLOX_VID = 0x1546
 SERIAL_BAUD = 38400          # USB 가상 시리얼(CDC-ACM)이라 실제 속도와 무관
 SPACING_M = 0.25             # 매핑: 이 거리마다 한 점 기록 (mapping.py 와 같은 기본값)
 SPACING_MIN, SPACING_MAX = 0.05, 10.0
-INTERVAL_S = 1.0             # 검증: 이 시간마다 한 점 기록
-INTERVAL_MIN, INTERVAL_MAX = 0.2, 60.0
+INTERVAL_S = 0.1             # 검증: 이 시간마다 한 점 기록 — 0.1 초 = NAV-PVT 를 하나도 버리지 않는다
+INTERVAL_MIN, INTERVAL_MAX = 0.1, 60.0
 EPOCH_MS = 100               # NAV-PVT 출력 주기 (CFG-RATE-MEAS 10 Hz)
 WEEK_MS = 7 * 24 * 3600 * 1000   # iTOW 는 매주 일요일 0시(GPS 시각)에 0 으로 돌아간다
 GGA_UPLOAD_SEC = 10          # VRS 캐스터로 현재 위치(GGA)를 올리는 주기
@@ -336,6 +376,166 @@ class NtripFatal(Exception):
     pass
 
 
+# ── RTCM 기지국 정보 ──────────────────────────────────────────────────────────────
+MSM_SYSTEM = {107: "GPS", 108: "GLONASS", 109: "Galileo", 110: "SBAS", 111: "QZSS", 112: "BeiDou", 113: "NavIC"}
+
+
+def crc24q(data):
+    """RTCM3 프레임 검사값 (CRC-24Q)."""
+    crc = 0
+    for b in data:
+        crc ^= b << 16
+        for _ in range(8):
+            crc <<= 1
+            if crc & 0x1000000:
+                crc ^= 0x1864CFB
+    return crc & 0xFFFFFF
+
+
+def ecef_to_llh(x, y, z):
+    """지구중심 좌표 [m] → (위도, 경도, 타원체고 m) — GRS80."""
+    a, f = 6378137.0, 1 / 298.257222101
+    e2 = f * (2 - f)
+    lon = math.atan2(y, x)
+    p = math.hypot(x, y)
+    lat = math.atan2(z, p * (1 - e2))
+    h = 0.0
+    for _ in range(6):
+        n = a / math.sqrt(1 - e2 * math.sin(lat) ** 2)
+        h = p / math.cos(lat) - n
+        lat = math.atan2(z, p * (1 - e2 * n / (n + h)))
+    return math.degrees(lat), math.degrees(lon), h
+
+
+class RtcmMonitor:
+    """NTRIP 으로 받은 RTCM3 를 엿봐 기지국 정보를 모은다. NtripClient 스레드가 feed, 창이 snapshot 을 부른다.
+    보정은 이와 상관없이 먼저 수신기로 간다."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.buf = b""
+        self.crc_bad = 0
+        self.last = {}           # 메시지 번호 → 마지막으로 받은 시각
+        self.station = None      # 1005/1006 : dict(id, lat, lon, h, virtual, ant_h, t)
+        self.physical = {}       # 1032 : 실제 기준국 ID → dict(lat, lon, h, vrs, t)
+        self.receiver = None     # 1033 : dict(id, antenna, rx, fw, sn)
+        self.network = None      # 1014 : dict(net, sub, master, aux, t)
+
+    def new_stream(self):
+        """다시 접속하면 앞 접속의 끊긴 조각만 버린다 — 기준국 정보는 새 메시지가 덮는다(VRS ID 는 접속마다 바뀐다)."""
+        with self.lock:
+            self.buf = b""
+
+    def snapshot(self):
+        with self.lock:
+            return dict(last=dict(self.last), station=self.station, physical=dict(self.physical),
+                        receiver=self.receiver, network=self.network, crc_bad=self.crc_bad)
+
+    def feed(self, data):
+        with self.lock:
+            b, i = self.buf + data, 0
+            while True:
+                j = b.find(b"\xd3", i)
+                if j < 0:
+                    i = len(b)
+                    break
+                if len(b) - j < 3:
+                    i = j
+                    break
+                if b[j + 1] & 0xFC:      # 머리의 예약 6비트는 늘 0 — 본문 속 0xD3 를 길이로 믿고 기다리지 않게
+                    i = j + 1
+                    continue
+                n = ((b[j + 1] & 0x03) << 8) | b[j + 2]
+                if len(b) - j < n + 6:
+                    i = j
+                    break
+                frame = b[j:j + n + 6]
+                if crc24q(frame[:-3]) != int.from_bytes(frame[-3:], "big"):
+                    self.crc_bad += 1     # 0xD3 는 본문에도 나온다 — 한 바이트 넘겨 다시 찾는다
+                    i = j + 1
+                    continue
+                self._message(frame[3:3 + n])
+                i = j + n + 6
+            self.buf = b[i:]
+
+    def _message(self, p):
+        if len(p) < 3:
+            return
+        v, size = int.from_bytes(p, "big"), len(p) * 8
+
+        def u(pos, k):
+            return (v >> (size - pos - k)) & ((1 << k) - 1) if pos + k <= size else 0
+
+        def sgn(pos, k):
+            x = u(pos, k)
+            return x - (1 << k) if x >> (k - 1) else x
+        msg, sid, now = u(0, 12), u(12, 12), time.time()
+        self.last[msg] = now
+        if msg in (1005, 1006) and size >= 152:
+            lat, lon, h = ecef_to_llh(sgn(34, 38) * 1e-4, sgn(74, 38) * 1e-4, sgn(114, 38) * 1e-4)
+            self.station = dict(id=sid, lat=lat, lon=lon, h=h, virtual=bool(u(33, 1)), t=now,
+                                ant_h=u(152, 16) * 1e-4 if msg == 1006 and size >= 168 else None)
+        elif msg == 1032 and size >= 156:
+            lat, lon, h = ecef_to_llh(sgn(42, 38) * 1e-4, sgn(80, 38) * 1e-4, sgn(118, 38) * 1e-4)
+            self.physical[u(24, 12)] = dict(lat=lat, lon=lon, h=h, vrs=sid, t=now)
+        elif msg == 1033:
+            texts, pos = [], 24
+            for k in range(5):     # 안테나 이름 · (설정 ID) · 안테나 일련번호 · 수신기 · 펌웨어 · 수신기 일련번호
+                c = u(pos, 8)
+                pos += 8
+                texts.append(bytes(u(pos + 8 * q, 8) for q in range(c)).decode("ascii", "replace").strip())
+                pos += 8 * c + (8 if k == 0 else 0)
+            self.receiver = dict(id=sid, antenna=texts[0], rx=texts[2], fw=texts[3], sn=texts[4])
+        elif msg == 1014 and size >= 53:
+            self.network = dict(net=u(12, 8), sub=u(20, 4), master=u(29, 12), aux=u(41, 12), t=now)
+
+
+def nearest_ngii(lat, lon):
+    """가장 가까운 NGII 위성기준점 (코드, 거리 m)."""
+    d, code = min((math.hypot(*delta_m(lat, lon, a, b)), c) for c, a, b in NGII_STATIONS)
+    return code, d
+
+
+def fmt_dist(m):
+    return f"{m:.0f} m" if m < 1000 else f"{m / 1000:.1f} km"
+
+
+def describe_base(rt, pos, now):
+    """창의 '기지국' 줄. rt 는 RtcmMonitor.snapshot(), pos 는 지금 위치 (위도, 경도) 또는 None."""
+    recent = sorted(m for m, t in rt["last"].items() if now - t <= RTCM_RECENT_SEC)
+    if not recent:
+        return "받는 RTCM 없음"
+    parts = []
+    st = rt["station"]
+    if st:
+        line = f"{'VRS 가상 기준국' if st['virtual'] else '기준국'} ID {st['id']}"
+        if pos:
+            line += f" (여기서 {fmt_dist(math.hypot(*delta_m(pos[0], pos[1], st['lat'], st['lon']))) })"
+        if now - st["t"] > 4 * RTCM_RECENT_SEC:
+            line += f" ({now - st['t']:.0f}초 전)"
+        parts.append(line)
+    for pid, ph in sorted(rt["physical"].items()):
+        if now - ph["t"] > 8 * RTCM_RECENT_SEC:
+            continue                       # 앞 접속에서 쓰던 기준국
+        code, d = nearest_ngii(ph["lat"], ph["lon"])
+        line = f"실제 기준국 ID {pid}" + (f" = NGII 위성기준점 {code}" if d <= NGII_MATCH_M
+                                        else f" ({ph['lat']:.5f}, {ph['lon']:.5f})")
+        if pos:
+            line += f" · {fmt_dist(math.hypot(*delta_m(pos[0], pos[1], ph['lat'], ph['lon'])))}"
+        parts.append(line)
+    nw = rt["network"]
+    if nw and now - nw["t"] <= 8 * RTCM_RECENT_SEC:
+        parts.append(f"네트워크 주 기준국 {nw['master']} · 보조 {nw['aux']}")
+    rx = rt["receiver"]
+    if rx and rx["rx"]:
+        parts.append(rx["rx"] + (f" #{rx['sn']}" if rx["sn"] else ""))
+    systems = [MSM_SYSTEM[k] for k in sorted({m // 10 for m in recent if 1070 <= m <= 1139}) if k in MSM_SYSTEM]
+    if systems:
+        parts.append("보정 위성 " + "·".join(systems))
+    parts.append("메시지 " + ",".join(str(m) for m in recent))
+    return " · ".join(parts)
+
+
 class NtripClient(threading.Thread):
     """NGII 캐스터 접속을 유지한다. 받은 RTCM3 는 sink(bytes) 로 넘긴다(시리얼 쓰기).
 
@@ -357,6 +557,7 @@ class NtripClient(threading.Thread):
         self.bytes_in = 0
         self.session_bytes = 0
         self.last_data_t = 0.0
+        self.rtcm = RtcmMonitor()       # 받은 보정에서 기지국 정보를 엿본다
         self.stop_evt = threading.Event()
         self.wake = threading.Event()   # 켬/끔이 바뀌면 대기 중인 루프를 바로 깨운다
 
@@ -442,6 +643,7 @@ class NtripClient(threading.Thread):
             raise NtripFatal(f"예상 밖 응답: {first}")
         self.status, self.detail = "streaming", first
         self.session_bytes = 0
+        self.rtcm.new_stream()
         self.last_data_t = time.time()
         self._send_gga(sock)
         if rest:
@@ -475,6 +677,10 @@ class NtripClient(threading.Thread):
         self.session_bytes += len(data)
         self.last_data_t = time.time()
         self.sink(data)
+        try:
+            self.rtcm.feed(data)        # 기지국 정보 — 보정은 이미 수신기로 갔으니 여기서 실패해도 RTK 는 그대로
+        except (IndexError, ValueError):
+            pass
 
     def _close(self):
         s, self.sock = self.sock, None
@@ -922,7 +1128,7 @@ class App:
         det = ttk.LabelFrame(root, text="상세", padding=(10, 6))
         det.pack(fill="x", padx=14, pady=(10, 0))
         self.detail = {}
-        for r, key in enumerate(("GPS", "위성", "RTK", "위치")):
+        for r, key in enumerate(("GPS", "위성", "RTK", "기지국", "위치")):
             ttk.Label(det, text=key, width=5, font=(F, 10, "bold")).grid(row=r, column=0, sticky="nw")
             lbl = ttk.Label(det, text="-", wraplength=640, justify="left")
             lbl.grid(row=r, column=1, sticky="w", pady=1)
@@ -1158,6 +1364,8 @@ class App:
         if nt.enabled and nt.status in ("retry", "fatal") and nt.detail:
             rtk += f" · 원인: {nt.detail}"
         self.detail["RTK"].configure(text=rtk)
+        here = (pvt["lat"], pvt["lon"]) if pvt and pvt["ok"] else None
+        self.detail["기지국"].configure(text=describe_base(nt.rtcm.snapshot(), here, now) if nt.enabled else "-")
 
         self.show_progress()
         self.root.after(200, self.tick)
@@ -1204,7 +1412,7 @@ class App:
             except OSError:
                 continue
             if p == live:
-                # 기록 중인 파일은 매번 다시 읽지 않고 recorder 의 누적값을 쓴다(검증 0.2 초 간격이면 금방 커진다)
+                # 기록 중인 파일은 매번 다시 읽지 않고 recorder 의 누적값을 쓴다(검증 0.1 초 간격이면 금방 커진다)
                 rows, length, rms, ext = rec.summary()
             else:
                 key = (stt.st_mtime_ns, stt.st_size)
