@@ -1,6 +1,20 @@
 __pycache__/
 *.pyc
+
+# colcon 산출물
+/build/
+/install/
+/log/
+
 # LibreOffice 가 CSV 를 열어 둔 동안 만드는 잠금 파일
 .~lock.*#
-# gps_mapper.py 가 find_wc 로 긴 기록을 열 때 이 폴더에 만드는 임시 HTML
+# tool/gps_mapper.py 가 궤적 사이트로 긴 기록을 열 때 만드는 임시 HTML
+gps_mapper_site.html
 gps_mapper_find_wc.html
+# broon/gpsdev.save_setting 이 저장 도중 잠깐 만드는 파일
+*.json.tmp
+
+# ★공개 리포★ — 주행 경로 · 주행 기록(좌표가 든 CSV)은 올리지 않는다.
+# 올려야 하면 사용자에게 확인한 뒤 `git add -f <파일>` (AGENTS.md A0)
+/src/*/gps_data/*.csv
+/src/*/ros2bag/*.csv
