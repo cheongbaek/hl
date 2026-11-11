@@ -1,0 +1,11 @@
+{
+  "_comment": "전방 · 후방 GPS 배치 (칩 고유 ID). ros2 run broon gps_setting 으로 고친다.",
+  "front": {
+    "id": "54401a3a98",
+    "name": "U-Blox AG u-blox GNSS receiver"
+  },
+  "rear": {
+    "id": "55408a3e9f",
+    "name": "U-Blox AG u-blox GNSS receiver"
+  }
+}
