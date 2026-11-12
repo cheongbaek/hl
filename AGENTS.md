@@ -45,6 +45,7 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트로 A · B 상 값을 바뀔 때마다
 │   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
+│   │                            analog_input.ino             : 가변저항(A0) analogRead 값을 딜레이 없이 그대로 (mad-code dc_0701_potential.ino 에서)
 │   │                            legacy_white.ino             : ★백업★ Mega 종합 주행 펌웨어 '하네스 T8 PID Control Vr.1'
 │   │                                                           (`~/Arduino/arduino_backup/arduino_backup.ino` 2026-05-13 을 그대로 복사, 고치지 않는다)
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
