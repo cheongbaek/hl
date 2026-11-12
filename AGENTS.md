@@ -46,6 +46,7 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트로 A · B 상 값을 바뀔 때마다
 │   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
 │   │                            analog_input.ino             : 가변저항(A0) analogRead 값을 딜레이 없이 그대로 (mad-code dc_0701_potential.ino 에서)
+│   │                            master_test_input.ino        : 시리얼 명령으로 0 ~ 13 · A0 ~ A5 핀 하나씩 출력(HIGH · LOW · PWM) · 읽기(풀업 0/1 · 아날로그)
 │   │                            legacy_white.ino             : ★백업★ Mega 종합 주행 펌웨어 '하네스 T8 PID Control Vr.1'
 │   │                                                           (`~/Arduino/arduino_backup/arduino_backup.ino` 2026-05-13 을 그대로 복사, 고치지 않는다)
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
@@ -138,7 +139,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - [ ] white2 : 듀얼 헤딩 잡음, 한쪽 Float · 오고정에서의 실제 거동, `base_tol_m`(0.2).
 - [ ] Float 로 계속 달릴 때의 실제 오차(시험에서는 0.6~2.7 m 였다 — B부 5.4절).
 - [ ] white : 실차 주행(순환 포함), 엔코더 300틱/회전, `tool/arduino_code.ino` 는 컴파일만 했다.
-- [ ] `tool/arduino_code/pulsetest_*_1112.ino` : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
+- [ ] `tool/arduino_code/` 의 시험 스케치(`pulsetest_*_1112` · `analog_input` · `master_test_input`) : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
       interrupt 판의 `R_IOPORT_PinCfg` 풀업 재설정이 R4 코어에서 컴파일되는지.
 - [ ] 조향 가변저항 상 · 하한(A3 의 −460 ~ 423 = ADC 52 ~ 935)이 지금 차에서 맞는지 — Vr.1 코드값이다. 끝까지 꺾어 ADC 를 실측한다.
 - [ ] `ros2 run broon gps_setting` 을 실제 수신기 두 대로(칩 ID 읽기 · 끌어다 놓기).
