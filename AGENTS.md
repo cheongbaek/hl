@@ -23,6 +23,8 @@
   좌표가 든 파일을 새로 올리기 전에 사용자에게 확인한다. (`tool/` 의 시험 기록 CSV 와 `tool/info.md` 의 NTRIP 접속 정보는 전부터 올라가 있다.)
 - 루트의 `white/`(레거시)는 사용자 지시(2026-11-11)로 **그대로 둔다** — 고치거나 지우지 않는다(A1).
 - `src/white1/white1/pose.py` 와 `src/white2/white2/pose.py` 는 **같은 파일**이다. 한쪽을 고치면 다른 쪽에 복사한다.
+- **아두이노 스케치는 ino 파일만 쓴다 — 에이전트가 보드에 올리지 않는다**(2026-11-12 사용자 지시). 사용자가 VS Code 에서 관리하고
+  Arduino IDE 에 복사 · 붙여넣기 해서 올린다 → 'ino 이름 = 폴더 이름' 규칙은 신경 쓰지 않는다. 이 노트북에는 R4 보드 코어가 없어 컴파일도 못 한다.
 
 ## A1. 저장소 구조
 
@@ -40,6 +42,9 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   ├── reminding.py           고정점 검증 기록 분석 GUI (새 양식의 point_*.csv 만 읽는다)
 │   ├── gpstest.py             F9P + NTRIP 측정 스크립트
 │   ├── arduino_code.ino       white 용 Mega 펌웨어 초안(white_fw) — ★보드에 올린 적 없다★
+│   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
+│   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트로 A · B 상 값을 바뀔 때마다
+│   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
 │   └── gps_data/ · gps_check_data/ · gps_data_single/     시험 기록 (대부분 옛 양식)
 ├── white/                     ★레거시★ gold 의 T870 시절 패키지 복사본(2026-09-30). 손대지 않는다
@@ -129,6 +134,8 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - [ ] white2 : 듀얼 헤딩 잡음, 한쪽 Float · 오고정에서의 실제 거동, `base_tol_m`(0.2).
 - [ ] Float 로 계속 달릴 때의 실제 오차(시험에서는 0.6~2.7 m 였다 — B부 5.4절).
 - [ ] white : 실차 주행(순환 포함), 엔코더 300틱/회전, `tool/arduino_code.ino` 는 컴파일만 했다.
+- [ ] `tool/arduino_code/pulsetest_*_1112.ino` : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
+      interrupt 판의 `R_IOPORT_PinCfg` 풀업 재설정이 R4 코어에서 컴파일되는지.
 - [ ] `ros2 run broon gps_setting` 을 실제 수신기 두 대로(칩 ID 읽기 · 끌어다 놓기).
 - [ ] 안드로이드 gpsmapper 앱은 아직 옛 CSV 양식이다(사이트가 거절한다 — 이 저장소 밖).
 
