@@ -45,6 +45,8 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트로 A · B 상 값을 바뀔 때마다
 │   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
+│   │                            legacy_white.ino             : ★백업★ Mega 종합 주행 펌웨어 '하네스 T8 PID Control Vr.1'
+│   │                                                           (`~/Arduino/arduino_backup/arduino_backup.ino` 2026-05-13 을 그대로 복사, 고치지 않는다)
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
 │   └── gps_data/ · gps_check_data/ · gps_data_single/     시험 기록 (대부분 옛 양식)
 ├── white/                     ★레거시★ gold 의 T870 시절 패키지 복사본(2026-09-30). 손대지 않는다
@@ -101,6 +103,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 | IMU | iAHRS (CP210x) — `white` 만 쓴다 |
 | 아두이노 (새) | **UNO R4 Minima 예정**, 펌웨어 미완성. `broon/arduino.py` 의 규약은 ★가작성★ |
 | 아두이노 (지금 차) | Mega 2560, **115200 bps 로 도는 v6 계열 스케치**(2026-11-09 포트를 직접 들어 확인. 원본 소스는 어디에도 없다). `~/Arduino/arduino_backup`(Vr.1, 57600)이 아니다 |
+| 조향 가변저항 | Mega **A15**. Vr.1 코드값(`legacy_white.ino`) : `analogRead − 512` 를 **−460 ~ 423** 으로 자른다 = ADC **52 ~ 935** (5 V 기준 0.25 ~ 4.57 V) ↔ **−19° ~ +19°** 직선. 0° 는 ADC 493.5 (512 가 아니다), 1° ≈ 23 카운트. 한계에 닿으면 조향 모터를 양방향 다 끈다. ★코드값일 뿐 실측 아니다★ (2026-11-12 확인) |
 | 제어 PC | MSI Katana 노트북, Ubuntu 22.04, ROS 2 Humble |
 
 ### 새 아두이노 규약 (가작성 — `src/broon/broon/arduino.py` 머리말이 정본)
@@ -136,6 +139,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - [ ] white : 실차 주행(순환 포함), 엔코더 300틱/회전, `tool/arduino_code.ino` 는 컴파일만 했다.
 - [ ] `tool/arduino_code/pulsetest_*_1112.ino` : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
       interrupt 판의 `R_IOPORT_PinCfg` 풀업 재설정이 R4 코어에서 컴파일되는지.
+- [ ] 조향 가변저항 상 · 하한(A3 의 −460 ~ 423 = ADC 52 ~ 935)이 지금 차에서 맞는지 — Vr.1 코드값이다. 끝까지 꺾어 ADC 를 실측한다.
 - [ ] `ros2 run broon gps_setting` 을 실제 수신기 두 대로(칩 ID 읽기 · 끌어다 놓기).
 - [ ] 안드로이드 gpsmapper 앱은 아직 옛 CSV 양식이다(사이트가 거절한다 — 이 저장소 밖).
 

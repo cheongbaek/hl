@@ -40,7 +40,10 @@
 
 // ===================== 파라미터 =====================
 const unsigned long SAMPLE_PERIOD_MS = 100;  // ★펄스를 모으고 내보내는 주기 [ms]★
-const uint8_t       QUAD_MODE        = 4;    // 쿼드러처 배수 : 1 · 2 · 4 (그 밖의 값은 4 로 본다)
+// ★카운터 클릭 계측 모드 — 여기서 고른다★ (기본 4 = x4 쿼드러처)
+//   엔코더 한 주기(A 상 펄스 1개)에 세는 수 : 1 → 1 · 2 → 2 · 4 → 4 (A · B 상승 · 하강 전부). 그 밖의 값은 4 로 본다.
+//   이 값이 아래 LS_MDR0_VAL 의 B1 B0 비트가 되고, setup() 에서 LS7366R 의 MDR0 레지스터에 쓴다.
+const uint8_t       QUAD_MODE        = 4;
 
 // ===================== 지금 쓰는 핀 =====================
 const uint8_t PIN_M1_PWM = 5;     // 모터 드라이버 1 PWM
@@ -66,9 +69,12 @@ const unsigned long SAMPLE_PERIOD_US = SAMPLE_PERIOD_MS * 1000UL;
 const uint8_t LS_CLR  = 0x00, LS_RD   = 0x40, LS_WR   = 0x80, LS_LOAD = 0xC0;
 const uint8_t LS_MDR0 = 0x08, LS_MDR1 = 0x10, LS_CNTR = 0x20;
 
-// MDR0 : B1 B0 = 쿼드러처 (01 x1 · 10 x2 · 11 x4), B3 B2 = 00 자유 계수, B5 B4 = 00 인덱스 안 씀, B6 = 0 비동기 인덱스, B7 = 0 필터 분주 1
+// ── 계측 모드 레지스터 값 (setup() 에서 MDR0 · MDR1 에 쓴다) ──
+// MDR0 : ★B1 B0 = 쿼드러처 모드★ — 00 비쿼드러처(A = 펄스 · B = 방향, 이 스케치는 안 씀) · 01 x1 · 10 x2 · 11 x4
+//        B3 B2 = 00 자유 계수, B5 B4 = 00 인덱스 안 씀, B6 = 0 비동기 인덱스, B7 = 0 필터 분주 1
+//        → 쿼드러처 비트만 위의 QUAD_MODE 로 고르고 나머지 비트는 0 이다. 기본(QUAD_MODE 4) = 0x03
 const uint8_t LS_MDR0_VAL = (QUAD_MODE == 1) ? 0x01 : (QUAD_MODE == 2) ? 0x02 : 0x03;
-// MDR1 : B1 B0 = 00 4바이트 카운터, B2 = 0 계수 허가, B4~B7 = 0 플래그 안 씀
+// MDR1 : B1 B0 = 00 4바이트 카운터, B2 = 0 계수 허가, B4~B7 = 0 플래그 안 씀 (쿼드러처와 무관)
 const uint8_t LS_MDR1_VAL = 0x00;
 
 const SPISettings LS_SPI(1000000, MSBFIRST, SPI_MODE0);
@@ -173,9 +179,9 @@ void setup() {
     digitalWrite(PIN_CNT_EN, HIGH);
   }
   SPI.begin();
-  lsWrite(LS_WR | LS_MDR0, LS_MDR0_VAL);
-  lsWrite(LS_WR | LS_MDR1, LS_MDR1_VAL);
-  lsCommand(LS_CLR | LS_CNTR);
+  lsWrite(LS_WR | LS_MDR0, LS_MDR0_VAL);   // ★계측 모드 설정★ — 쿼드러처 배수(QUAD_MODE) · 자유 계수 · 인덱스 안 씀
+  lsWrite(LS_WR | LS_MDR1, LS_MDR1_VAL);   // 4바이트 카운터 · 계수 허가
+  lsCommand(LS_CLR | LS_CNTR);             // 카운터 0 으로
 
   cnt_prev = lsReadCounter();
   next_us  = micros() + SAMPLE_PERIOD_US;
