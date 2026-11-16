@@ -43,7 +43,7 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   ├── gpstest.py             F9P + NTRIP 측정 스크립트
 │   ├── arduino_code.ino       white 용 Mega 펌웨어 초안(white_fw) — ★보드에 올린 적 없다★
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
-│   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트로 A · B 상 값을 바뀔 때마다
+│   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트(CHANGE)로 A · B 상 에지 수를 1 s 마다 따로 (11-16 바꿈)
 │   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
 │   │                            analog_input.ino             : 가변저항(A0) analogRead 값을 딜레이 없이 그대로 (mad-code dc_0701_potential.ino 에서)
 │   │                            master_test_input.ino        : 시리얼 명령으로 0 ~ 13 · A0 ~ A5 핀 하나씩 출력(HIGH · LOW · PWM) · 읽기(풀업 0/1 · 아날로그)

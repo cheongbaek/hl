@@ -1,17 +1,19 @@
 // =====================================================================================
-// pulsetest_interrupt_1112.ino ― 엔코더 A · B 상 파형 확인 + 모터 PWM 손 입력 시험 (Arduino UNO R4 Minima)
+// pulsetest_interrupt_1112.ino ― 엔코더 A · B 상 초당 펄스 수 + 모터 PWM 손 입력 시험 (Arduino UNO R4 Minima)
 // =====================================================================================
 // 펄스 · 센서 계측용 시험 스케치다 (2026-11-12). 지금은 모터 드라이버 1개와 엔코더 A · B(2 · 3번 핀)만 쓴다.
+// 2026-11-16 : 출력을 'A · B 가 바뀔 때마다 두 핀 값' 에서 '1 초마다 상별 펄스 수' 로 바꿨다.
 // ★컴파일도 업로드도 해 보지 않았다 — 미검증★ (이 노트북에 arduino-cli · R4 보드 코어가 없다).
 //
 // ── 출력 (아두이노 → PC) ───────────────────────────────────────────────────────────
-//   "<A> <B>" 한 줄. A · B 는 2 · 3번 핀의 논리값이다 (HIGH = 1, LOW = 0).
-//   ★주기 없이★ A 나 B 가 바뀔 때마다(인터럽트 CHANGE) 그 순간의 두 값을 한 줄씩 낸다 — 바뀐 것은 빠짐없이.
-//   예) 정방향이면  0 0 → 1 0 → 1 1 → 0 1 → 0 0 …   (A 와 B 가 거의 동시에 바뀌면 같은 줄이 두 번 나올 수 있다)
-//   숫자 말고는 아무것도 내지 않는다 — 시리얼 플로터에 A · B 두 줄 그래프로 그대로 뜬다.
-//   ※ 바뀌는 것이 없으면(모터가 서 있으면) 아무것도 나오지 않는다. 플로터 가로축은 시간이 아니라 '변화 횟수' 다.
-//   변화는 인터럽트가 링 버퍼(1024 개)에 쌓고 loop 가 꺼내 보낸다. 출력이 못 따라가 버퍼가 차면
-//   그 뒤 변화는 버린다 — 플로터 파형이 중간에 건너뛰면 그 때문이다.
+//   1 초에 한 줄, "<A> <B>". A · B 는 지난 1 초 동안 2 · 3번 핀에 들어온 펄스 수다 (상마다 따로 센다).
+//   인터럽트를 CHANGE 로 걸어 오르내림(LOW ↔ HIGH)을 모두 센다 — 펄스 한 주기에 2 가 는다.
+//   예) 240 238   ← 상마다 1 회전 N 펄스인 엔코더면 초당 회전수 ≈ 240 / (2N).
+//   정상이면 A 와 B 가 거의 같다(±1). 크게 다르면 그 상의 배선 · 풀업 · 잡음을 의심한다.
+//   방향은 따지지 않는다 — 정방향이든 역방향이든 양수로 센다.
+//   모터가 서 있어도 "0 0" 이 1 초마다 나온다. 숫자 말고는 아무것도 내지 않는다 —
+//   시리얼 플로터에 A · B 두 줄 그래프로 그대로 뜬다 (가로축 한 칸 = 1 초).
+//   1 초는 millis() 로 잰다. loop 가 몇 ms 늦으면 그만큼 다음 창이 짧아져 길게 보면 맞는다 (한 창의 오차는 ±1 펄스 안팎).
 //
 // ── 입력 (PC → 아두이노) ───────────────────────────────────────────────────────────
 //   정수 하나 + 줄 끝. −255..255 (넘으면 잘라 낸다).
@@ -45,22 +47,21 @@ const uint8_t PIN_ANALOG = A0;    // 아날로그 입력
 
 const long          PWM_MAX     = 255;
 const unsigned long CMD_IDLE_MS = 100;   // 줄 끝 없이 들어온 명령을 반영하기까지 기다리는 시간
+const unsigned long REPORT_MS   = 1000;  // 펄스 수를 내보내는 주기 (= 세는 창의 길이)
 
-// ===================== 엔코더 변화 링 버퍼 (인터럽트 → loop) =====================
-const uint16_t EV_BUF_SIZE = 1024;       // 2 의 거듭제곱이어야 한다 (& 로 감는다)
-volatile uint8_t  ev_buf[EV_BUF_SIZE];   // 비트1 = A, 비트0 = B
-volatile uint16_t ev_head = 0;           // 인터럽트만 쓴다
-volatile uint16_t ev_tail = 0;           // loop 만 쓴다
+// ===================== 엔코더 펄스 카운터 (인터럽트 → loop) =====================
+// 부팅 뒤 누적 펄스 수. 되돌리지 않고 loop 가 지난번 값과의 차이로 1 초치를 구한다 —
+// 32 비트 읽기는 Cortex-M4 에서 한 번에 끝나므로 인터럽트를 끄지 않아도 되고, 넘쳐 돌아도 부호 없는 뺄셈이라 맞다.
+volatile uint32_t cnt_a = 0;
+volatile uint32_t cnt_b = 0;
 
-// A · B 어느 쪽이 바뀌어도 여기로 온다 — 그 순간의 두 값을 함께 쌓는다
-void onEncoderEdge() {
-  uint8_t s = (digitalRead(PIN_ENC_A) == HIGH ? 2 : 0) | (digitalRead(PIN_ENC_B) == HIGH ? 1 : 0);
-  uint16_t next = (ev_head + 1) & (EV_BUF_SIZE - 1);
-  if (next != ev_tail) {          // 꽉 찼으면 버린다
-    ev_buf[ev_head] = s;
-    ev_head = next;
-  }
-}
+void onEncoderA() { cnt_a++; }
+void onEncoderB() { cnt_b++; }
+
+// loop 쪽 기록 (setup 에서도 쓰므로 여기서 선언한다)
+unsigned long report_last_ms = 0;   // 지금 창의 시작 시각
+uint32_t      report_prev_a  = 0;   // 지난번 출력 때의 누적 수
+uint32_t      report_prev_b  = 0;
 
 // ===================== 모터 =====================
 void setMotor(long v) {
@@ -124,25 +125,36 @@ void setup() {
 
   pinMode(PIN_ENC_A, INPUT_PULLUP);
   pinMode(PIN_ENC_B, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), onEncoderEdge, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), onEncoderEdge, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), onEncoderA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), onEncoderB, CHANGE);
   // R4 코어의 attachInterrupt 는 핀 설정을 '인터럽트 + 입력' 으로 통째로 덮어써 풀업이 빠질 수 있다 —
   // 풀업을 다시 켠다 (pinMode 를 뒤에 부르면 이번엔 인터럽트가 꺼진다). 오픈컬렉터 엔코더면 풀업이 꼭 있어야 한다.
   R_IOPORT_PinCfg(&g_ioport_ctrl, g_pin_cfg[PIN_ENC_A].pin,
                   IOPORT_CFG_IRQ_ENABLE | IOPORT_CFG_PORT_DIRECTION_INPUT | IOPORT_CFG_PULLUP_ENABLE);
   R_IOPORT_PinCfg(&g_ioport_ctrl, g_pin_cfg[PIN_ENC_B].pin,
                   IOPORT_CFG_IRQ_ENABLE | IOPORT_CFG_PORT_DIRECTION_INPUT | IOPORT_CFG_PULLUP_ENABLE);
+
+  report_last_ms = millis();   // 첫 창은 여기서부터
+}
+
+// ===================== 1 초마다 펄스 수 출력 =====================
+void reportPulses() {
+  unsigned long now = millis();
+  if (now - report_last_ms < REPORT_MS) return;
+  report_last_ms += REPORT_MS;                                        // 밀리지 않게 1 초씩 더한다
+  if (now - report_last_ms >= REPORT_MS) report_last_ms = now;        // 1 초 넘게 늦었으면 몰아 내지 말고 다시 맞춘다
+
+  uint32_t a = cnt_a;
+  uint32_t b = cnt_b;
+  char line[32];
+  int n = snprintf(line, sizeof(line), "%lu %lu\r\n",
+                   (unsigned long)(a - report_prev_a), (unsigned long)(b - report_prev_b));
+  report_prev_a = a;
+  report_prev_b = b;
+  Serial.write((const uint8_t *)line, n);   // 한 번에 보낸다 (USB 전송 횟수를 줄인다)
 }
 
 void loop() {
-  // 1) 쌓인 변화를 한 바퀴에 한 줄씩 — 변화가 쏟아져도 명령 수신(정지 명령)이 밀리지 않게
-  if (ev_tail != ev_head) {
-    uint8_t s = ev_buf[ev_tail];
-    ev_tail = (ev_tail + 1) & (EV_BUF_SIZE - 1);
-    char line[5] = { (char)('0' + ((s >> 1) & 1)), ' ', (char)('0' + (s & 1)), '\r', '\n' };
-    Serial.write((const uint8_t *)line, sizeof(line));   // 한 번에 보낸다 (USB 전송 횟수를 줄인다)
-  }
-
-  // 2) PWM 명령
-  readCommand();
+  reportPulses();   // 1) 1 초마다 A · B 펄스 수
+  readCommand();    // 2) PWM 명령
 }
