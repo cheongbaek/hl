@@ -47,6 +47,8 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   │                            pulsetest_count_1112.ino     : 카운터 클릭(LS7366R, SPI)으로 0.1 s 마다 펄스 수
 │   │                            analog_input.ino             : 가변저항(A0) analogRead 값을 딜레이 없이 그대로 (mad-code dc_0701_potential.ino 에서)
 │   │                            master_test_input.ino        : 시리얼 명령으로 0 ~ 13 · A0 ~ A5 핀 하나씩 출력(HIGH · LOW · PWM) · 읽기(풀업 0/1 · 아날로그)
+│   │                            steer_test_1116.ino          : 조향 PID 튜닝 (2026-11-16) — 드라이버 PWM 10 · DIR 8, 가변저항 A0, 게인 · 목표각을 시리얼로.
+│   │                                                           레거시에서는 가변저항 값만 가져왔다(드라이버가 다른 모델). 출력은 "명령각 실제각 -21 21"(뒤 둘은 눈금 고정용 직선) 뿐
 │   │                            legacy_white.ino             : ★백업★ Mega 종합 주행 펌웨어 '하네스 T8 PID Control Vr.1'
 │   │                                                           (`~/Arduino/arduino_backup/arduino_backup.ino` 2026-05-13 을 그대로 복사, 고치지 않는다)
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
@@ -106,6 +108,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 | 아두이노 (새) | **UNO R4 Minima 예정**, 펌웨어 미완성. `broon/arduino.py` 의 규약은 ★가작성★ |
 | 아두이노 (지금 차) | Mega 2560, **115200 bps 로 도는 v6 계열 스케치**(2026-11-09 포트를 직접 들어 확인. 원본 소스는 어디에도 없다). `~/Arduino/arduino_backup`(Vr.1, 57600)이 아니다 |
 | 조향 가변저항 | Mega **A15**. Vr.1 코드값(`legacy_white.ino`) : `analogRead − 512` 를 **−460 ~ 423** 으로 자른다 = ADC **52 ~ 935** (5 V 기준 0.25 ~ 4.57 V) ↔ **−19° ~ +19°** 직선. 0° 는 ADC 493.5 (512 가 아니다), 1° ≈ 23 카운트. 한계에 닿으면 조향 모터를 양방향 다 끈다. ★코드값일 뿐 실측 아니다★ (2026-11-12 확인) |
+| 조향 (새 R4) | 모터 드라이버 **Cytron MD20A, PWM 10 · DIR 8** (레거시 Mega 와 다른 모델). MD20A 는 DIR Low → MA 출력 High(데이터시트 표 3), 이 차는 MA 버튼 = 우 · MB = 좌 → **DIR LOW = 우**. PWM Low = 브레이크. 가변저항 **A0** : **좌 끝 ADC 954 (실측 2026-11-16)** · 우 끝 ADC 52 (Vr.1 값, 미실측) → **값이 클수록 좌** (레거시 코드는 52 쪽을 LEFT 로 불렀다 — 이름이 반대). 이를 **−21° ~ +21° (− 좌 · + 우)** 로 잇는다 — 실제 바퀴 각은 나중에 실측해 고친다 (사용자 지정 2026-11-16, `steer_test_1116.ino`). 기구 끝에서는 모터가 헛돌 뿐이라 **소프트웨어 끝 보호는 넣지 않는다** (사용자 지시). 조향 PID 실차 시험(2026-11-16) : 넘침 없음(감쇠 충분), 움직이기 시작하는 PWM ≈ 10(가운데) ~ 25(±18°), Kp 8 · Ki 10 은 I 가 다음 동작으로 넘어가 복귀가 느림 → 기본값 Kp 12 · Ki 20 · Kd 0 (모형 시뮬레이션 제안, 실차 확인 전) |
 | 제어 PC | MSI Katana 노트북, Ubuntu 22.04, ROS 2 Humble |
 
 ### 새 아두이노 규약 (가작성 — `src/broon/broon/arduino.py` 머리말이 정본)
@@ -142,6 +145,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - [ ] `tool/arduino_code/` 의 시험 스케치(`pulsetest_*_1112` · `analog_input` · `master_test_input`) : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
       interrupt 판의 `R_IOPORT_PinCfg` 풀업 재설정이 R4 코어에서 컴파일되는지.
 - [ ] 조향 가변저항 상 · 하한(A3 의 −460 ~ 423 = ADC 52 ~ 935)이 지금 차에서 맞는지 — Vr.1 코드값이다. 끝까지 꺾어 ADC 를 실측한다.
+      2026-11-16 : 좌 끝 = ADC **954** 실측(큰 값 쪽이 좌). **우 끝은 아직** — 재면 `steer_test_1116.ino` 의 `POT_RIGHT_ADC` 를 고친다.
 - [ ] `ros2 run broon gps_setting` 을 실제 수신기 두 대로(칩 ID 읽기 · 끌어다 놓기).
 - [ ] 안드로이드 gpsmapper 앱은 아직 옛 CSV 양식이다(사이트가 거절한다 — 이 저장소 밖).
 
