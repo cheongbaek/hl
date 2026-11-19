@@ -14,7 +14,10 @@ white 대비 달라진 것
       출발 : 조향 0 으로 곧게 굴려 전방 안테나의 변위로 첫 헤딩을 잡는다(DRIVE_HEADING — white 와 같은 방법).
       이후 : 전방 안테나 궤적으로 뒷차축 자리와 헤딩을 잇는다(pose.FrontTracker — 견인 기하, pose.py 머리말).
     GPS 안테나는 ★뒷차축에서 antenna_base_m 앞★(앞차축 쪽)에 있다. 제어 기준점은 white 와 같이 뒷차축이다.
-  · ★바퀴 속도가 없다★ — 새 아두이노 규약은 PC 로 아무것도 보내지 않는다. 속도는 GPS 지면속도(NAV-PVT)로 본다.
+  · ★경로 CSV = 전방 GPS 안테나가 지나간 길★ (2026-11-19 사용자 지정 — mapping 이 GPS 궤적만 저장한다).
+    경로를 고를 때 그 궤적을 같은 견인 기하(FrontTracker)로 ★뒷차축 궤적으로 바꿔★ 따라간다(antenna_path_to_rear).
+    순환 경로는 두 바퀴를 돌려 둘째 바퀴 값을 쓴다(첫 헤딩을 어림한 앞부분의 흔들림이 없게).
+  · ★속도는 GPS 지면속도로 본다★ (우노가 /enc_pot 으로 실측 펄스를 주지만 아직 쓰지 않는다 — 펄스 환산값이 미검증).
     전방 안테나의 속도라 선회 중에는 뒷차축보다 조금 크다(조향 20° 에서 6 %).
     지연 예측의 요레이트는 직전 조향 명령으로 추정한다(black 의 'IMU 두절' 경로).
   · ★출발은 RTK Fixed 에서만, 그 뒤로는 Float 여도 계속 간다★ (사용자 지정 2026-11-11).
@@ -22,17 +25,27 @@ white 대비 달라진 것
     서서 기다렸다가 Float 이상이 GPS_RESUME_S 이어지면 그 자리에서 재개한다. 헤딩을 잡는 직진 구간은 Fixed 만 쓴다.
     ⚠️ Float 는 실제 오차가 0.6~2.7 m 일 수 있다(AGENTS.md GPS 시험) — 위치가 튀면 헤딩도 흔들린다.
        한 번에 돌 수 있는 양만 막아 두었다(pose.turn_limit_deg). 경로에서 2 m 벗어나면 선다.
-  · ★명령은 km/h · 도★ — /cmd_vel_raw 의 linear.x 가 km/h 다(white 는 m/s). broon/arduino 가 정수로
-    반올림해 4바이트 프레임으로 보낸다(최대 16 km/h · 25°). 안에서는 m/s 로 계산한다.
-    속도 인자도 km/h : cruise_kmh 6 · min_kmh 4 · heading_kmh 4 (정수 km/h 로 나가므로 속도는 4 · 5 · 6 단계다).
-  · 리모컨 · IMU · 아두이노 응답은 보지 않는다.
+  · ★명령은 우노 규약 그대로 — 펄스 · 도 정수★ (2026-11-19 사용자 지정, tool/arduino_code/broon_1119.ino)
+    /cmd_vel (Int32MultiArray) = [목표 펄스 0 ~ 92, 목표 조향각 −21 ~ 21 (★− 좌 · + 우★)]. 후진(음수 펄스)은 내지 않는다.
+    broon/arduino 가 받아 우노로 그대로 보낸다. 안에서는 black 제어 그대로 m/s · 도(+ 좌)로 계산하고 send() 에서 바꾼다.
+    펄스 = m/s × pulse_per_mps (★추정 45 — 미검증★, 92 펄스 ≈ 2 m/s 로 어림. record 의 GPS 속도 · 실측 펄스로 맞출 것).
+    속도 인자도 펄스 : cruise_pulse 75 · min_pulse 50 · heading_pulse 50 (옛 6 · 4 · 4 km/h 를 45 로 바꾼 값).
+  · ★조향 보정은 중립★ (2026-11-19 사용자 지정) — 트림 0 · 좌우 게인 1.0 · 상한 21°. 새 조향(MD20A + 가변저항 PID)이라
+    black 의 실측 트림(−1.5°) · 게인(0.85 / 0.82)은 근거가 없다. 런치 인자 steer_trim_deg · steer_gain_l · steer_gain_r 로 맞춘다.
+  · ★조이스틱 개입★ — /joy318 (Int32 1, 조이스틱 SWA 가 ON 인 동안 broon/joy 가 낸다)을 들으면 자율주행을 멈추고
+    ★/cmd_vel 발행을 곧바로 그친다★(0 도 보내지 않는다 — 조이스틱이 차를 쥔다) → IDLE. ON 인 동안은 출발을 거절한다.
+    그래서 자율주행은 SWA OFF 에서만 돌고, 조이스틱이 자율을 멈추는 때는 ON 으로 바꾸는 순간뿐이다(사용자 지정).
+  · ★원격 E-STOP★ — /estop (Int32 래치, broon/estop — 웹 domiman.duckdns.org/estop)이 1 이면 자율주행을 끝낸다(DRIVE_DONE →
+    서면 IDLE). 1 인 동안은 출발을 거절한다. 차를 실제로 세우는 것은 broon/arduino 다(/cmd_vel 을 막고 우노에 's' · '0 0').
+  · IMU 는 보지 않는다. 조이스틱은 /joy318 만 본다.
 
 토픽
-  구독  /gps_pvt (전방 GPS — broon/gps) · /drive_cmd
-  발행  /cmd_vel_raw (Twist: linear.x ★km/h★, angular.z deg ★+ 좌 / − 우★)   /control_state (Bool)
+  구독  /gps_pvt (전방 GPS — broon/gps) · /drive_cmd · /joy318 (Int32) · /estop (Int32 래치)
+  발행  /cmd_vel (Int32MultiArray: [펄스 0~92, 조향 −21~21 ★− 좌 · + 우★])   /control_state (Bool)
         /drive_state · /drive_event · /drive_status (String)   /driving_debug (Float64MultiArray, black 0~26)
         /ego_state (Float64MultiArray: 뒷차축 x, y [m], 헤딩 [deg], 속도 [m/s], 뒷차축 위도, 경도, 자세 방식)
         /mapping_cmd (Bool)   /route_dir (String)
+  주행 기록은 broon/record(mode:=drive)가 이 토픽들로 남긴다 — one.launch.py 가 함께 띄운다.
 
 상태기계 (white 와 같다)
       IDLE ──(MAP_START)──▶ MAP ──(MAP_STOP)──▶ IDLE
@@ -41,7 +54,7 @@ white 대비 달라진 것
                                    속도 0, 조향 0 → GPS 속도가 2 s 동안 0 이면 IDLE (prompt 메뉴 복귀)
 
 ⚠️ 실차 미검증 — 가상 차량 시뮬레이션으로만 확인했다. 실측해서 넣을 값 : antenna_base_m(뒷차축 → 안테나),
-   WHEELBASE_M 0.73(레거시 코드 값), 조향 부호 · 눈금(새 아두이노), black 의 조향 트림 · 게인이 그대로 맞는지.
+   WHEELBASE_M 0.73(레거시 코드 값), pulse_per_mps(펄스 ↔ m/s), 조향 눈금(가변저항 ±21° 가 실제 바퀴각인지) · 트림.
 """
 
 import csv
@@ -52,11 +65,11 @@ import time
 
 import rclpy
 import rclpy.executors
-from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
-from std_msgs.msg import Bool, Float64MultiArray, String
+from std_msgs.msg import Bool, Float64MultiArray, Int32, Int32MultiArray, String
 
+from broon.boards import CMD_TOPIC, ESTOP_TOPIC, JOY318_TOPIC, PULSE_MAX, STEER_MAX
 from broon.gpsdev import GPS_PVT_FIELDS, GPS_PVT_TOPIC, Q_FIXED, Q_FLOAT, Q_LABEL, Q_NONE
 from white1 import paths
 from white1.pose import MODE_FRONT, MODE_NONE, FrontTracker, turn_limit_deg
@@ -65,11 +78,12 @@ from white1.pose import MODE_FRONT, MODE_NONE, FrontTracker, turn_limit_deg
 #  차량 · 속도
 # ══════════════════════════════════════════════════════════════════════════════
 WHEELBASE_M = 0.73           # 휠베이스 [m] (black)
-STEER_MAX_DEG = 20.0         # ROS측 조향 클램프 (black, v6 눈금)
-CRUISE_KMH = 6.0             # ★순항 상한 [km/h]★ (white 1.8 m/s = 6.5 km/h → 정수 6)
-MIN_KMH = 4.0                # 주행 중 최저 속도 (black 1.0 m/s = 3.6 km/h → 정수 4)
-HEADING_KMH = 4.0            # 헤딩 초기화 직진 속도
-MAX_KMH = 16.0               # 아두이노 규약 상한 (broon/arduino.py)
+STEER_MAX_DEG = float(STEER_MAX)   # 조향 클램프 21° — 우노 규약 상한 (black 은 20)
+PULSE_PER_MPS = 45.0         # ★1 m/s = 몇 펄스★ (추정 — 92 펄스 ≈ 2 m/s. 미검증, 런치 인자 pulse_per_mps)
+CRUISE_PULSE = 75            # ★순항 상한 [펄스]★ (≈ 1.67 m/s = 옛 6 km/h)
+MIN_PULSE = 50               # 주행 중 최저 속도 [펄스] (≈ 1.11 m/s = 옛 4 km/h)
+HEADING_PULSE = 50           # 헤딩 초기화 직진 속도 [펄스]
+JOY_ON_GAP_S = 0.5           # /joy318 을 이만큼 안에 들었으면 '조이스틱 ON' (joy 가 0.1 s 마다 낸다)
 ANTENNA_BASE_M = 1.0         # ★뒷차축 → 전방 안테나 거리★ (사용자 지정 2026-11-11 — 실측해서 런치 인자로 고칠 것)
 HEADING_RAMP_S = 1.0         # 헤딩 초기화 출발 램프
 SAFE_STOP_SPEED = 0.08       # 정지로 간주하는 미세속도 (black)
@@ -127,9 +141,9 @@ PREDICT_HORIZON_S = 0.50     # 조향지연 실측 0.45~0.55 s (black 0703 · 07
 PREDICT_MAX_YAW_RAD = 0.60
 OMEGA_N_MAX = 0.95
 OMEGA_N_MAX_NO_IMU = 0.80
-STEER_PLANT_GAIN_L = 0.85    # 좌회전 실효게인
-STEER_PLANT_GAIN_R = 0.82    # 우회전 실효게인
-STEER_TRIM_DEG = -1.5        # 직진 쏠림 트림 (black 0703 실측)
+STEER_PLANT_GAIN_L = 1.0     # 좌회전 실효게인 — ★중립★ (black 0.85 는 옛 조향 실측, 2026-11-19 사용자 지정)
+STEER_PLANT_GAIN_R = 1.0     # 우회전 실효게인 — ★중립★ (black 0.82)
+STEER_TRIM_DEG = 0.0         # 직진 쏠림 트림 — ★중립★ (black 0703 실측 −1.5)
 V_SCHED_TAU = 0.30
 LFD_RATE_UP = 0.9
 LFD_RATE_DOWN = 2.0
@@ -310,6 +324,36 @@ def read_route_csv(path):
     return pts, loop, rev, zones
 
 
+def antenna_path_to_rear(pts_xy, base_m, loop=False):
+    """전방 안테나 궤적 [(x, y)] → 뒷차축 궤적 (같은 개수). mapping 이 예전에 기록하며 하던 계산을 여기서 한다.
+
+    뒷차축은 안테나에 끌려가는 점이다(pose.FrontTracker). 첫 헤딩은 처음 0.5 m 움직인 방향으로 잡고,
+    그 전의 점들은 그 헤딩으로 한꺼번에 옮긴다. 순환이면 두 바퀴를 돌려 둘째 바퀴 값을 쓴다."""
+    n = len(pts_xy)
+    if n < 2 or base_m <= 0.0:
+        return list(pts_xy)
+    seq = list(pts_xy) * (2 if loop else 1)
+    tr = FrontTracker(base_m)
+    out, pending = [], []
+    for fx, fy in seq:
+        if not tr.ready:
+            pending.append((fx, fy))
+            if not tr.feed(fx, fy, auto_init=True):
+                continue
+            h = math.radians(tr.heading)
+            ox, oy = base_m * math.cos(h), base_m * math.sin(h)
+            out.extend((px - ox, py - oy) for px, py in pending)
+            pending = []
+            continue
+        tr.feed(fx, fy)
+        out.append(tr.rear())
+    if pending:      # 0.5 m 도 안 움직인 짧은 경로 — 처음 → 끝 방향으로 옮긴다
+        (x0, y0), (x1, y1) = pending[0], pending[-1]
+        d = math.hypot(x1 - x0, y1 - y0) or 1.0
+        out.extend((px - base_m * (x1 - x0) / d, py - base_m * (y1 - y0) / d) for px, py in pending)
+    return out[-n:]
+
+
 class HeadingEstimator:
     """곧게 굴러간 구간의 GPS 점들로 진행 방위를 낸다 (gold white1).
 
@@ -360,17 +404,26 @@ class DrivingNode(Node):
     def __init__(self):
         super().__init__('driving_node')
         self.declare_parameter('data_dir', '')
-        self.declare_parameter('cruise_kmh', CRUISE_KMH)
-        self.declare_parameter('min_kmh', MIN_KMH)
-        self.declare_parameter('heading_kmh', HEADING_KMH)
+        self.declare_parameter('cruise_pulse', CRUISE_PULSE)
+        self.declare_parameter('min_pulse', MIN_PULSE)
+        self.declare_parameter('heading_pulse', HEADING_PULSE)
+        self.declare_parameter('pulse_per_mps', PULSE_PER_MPS)
+        self.declare_parameter('steer_trim_deg', STEER_TRIM_DEG)
+        self.declare_parameter('steer_gain_l', STEER_PLANT_GAIN_L)
+        self.declare_parameter('steer_gain_r', STEER_PLANT_GAIN_R)
         self.declare_parameter('run_min_quality', RUN_MIN_QUALITY)   # 3 = Float 여도 계속, 4 = Fixed 에서만 주행
         self.declare_parameter('antenna_base_m', ANTENNA_BASE_M)
         self.declare_parameter('wp_reach_m', WP_REACH_M)
         self.declare_parameter('cte_deviation_m', CTE_DEVIATION_M)
         self.data_dir = paths.data_dir(str(self.get_parameter('data_dir').value))
-        self.max_speed = min(MAX_KMH, float(self.get_parameter('cruise_kmh').value)) / 3.6
-        self.min_speed = min(float(self.get_parameter('min_kmh').value) / 3.6, self.max_speed)
-        self.heading_speed = min(MAX_KMH, float(self.get_parameter('heading_kmh').value)) / 3.6
+        self.ppm = max(1.0, float(self.get_parameter('pulse_per_mps').value))
+        self.cruise_pulse = max(1, min(PULSE_MAX, int(self.get_parameter('cruise_pulse').value)))
+        self.max_speed = self.cruise_pulse / self.ppm
+        self.min_speed = min(max(0, int(self.get_parameter('min_pulse').value)) / self.ppm, self.max_speed)
+        self.heading_speed = min(PULSE_MAX, max(1, int(self.get_parameter('heading_pulse').value))) / self.ppm
+        self.steer_trim = float(self.get_parameter('steer_trim_deg').value)
+        self.steer_gain_l = max(0.5, float(self.get_parameter('steer_gain_l').value))
+        self.steer_gain_r = max(0.5, float(self.get_parameter('steer_gain_r').value))
         self.run_min_q = max(1, min(Q_FIXED, int(self.get_parameter('run_min_quality').value)))
         self.ant_base = float(self.get_parameter('antenna_base_m').value)
         self.wp_reach = float(self.get_parameter('wp_reach_m').value)
@@ -418,10 +471,12 @@ class DrivingNode(Node):
         self._done_zero_t = None
 
         self._last_evt = {}
+        self.joy_t = -1e9             # 마지막 /joy318 (조이스틱 SWA ON)
+        self.estop = False            # /estop 1 — 원격 E-STOP
         self.reset_controller()
 
         qos_latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.pub_cmd = self.create_publisher(Twist, '/cmd_vel_raw', 10)
+        self.pub_cmd = self.create_publisher(Int32MultiArray, CMD_TOPIC, 10)
         self.pub_ctrl = self.create_publisher(Bool, '/control_state', 10)
         self.pub_state = self.create_publisher(String, '/drive_state', 10)
         self.pub_event = self.create_publisher(String, '/drive_event', 50)
@@ -432,13 +487,17 @@ class DrivingNode(Node):
         self.pub_dir = self.create_publisher(String, '/route_dir', qos_latched)
         self.create_subscription(Float64MultiArray, GPS_PVT_TOPIC, self.cb_pvt, 20)
         self.create_subscription(String, '/drive_cmd', self.cb_drive_cmd, 10)
+        self.create_subscription(Int32, JOY318_TOPIC, self.cb_joy318, 10)
+        self.create_subscription(Int32, ESTOP_TOPIC, self.cb_estop, qos_latched)
         self.create_timer(1.0 / CONTROL_HZ, self.loop)
         self.create_timer(0.2, self.publish_state)
         self.pub_dir.publish(String(data=self.data_dir))
 
         self.get_logger().info(
-            f"🚀 driving [white1 — 단일 GPS(전방 안테나), IMU 없음] 순항 {self.max_speed * 3.6:.0f} km/h · "
-            f"최저 {self.min_speed * 3.6:.0f} · 헤딩 직진 {self.heading_speed * 3.6:.0f} km/h · "
+            f"🚀 driving [white1 — 단일 GPS(전방 안테나), IMU 없음] 순항 {self.cruise_pulse} 펄스 · "
+            f"최저 {self.min_speed * self.ppm:.0f} · 헤딩 직진 {self.heading_speed * self.ppm:.0f} 펄스 "
+            f"(1 m/s = {self.ppm:g} 펄스, 추정) · 조향 트림 {self.steer_trim:+.1f}° 게인 좌 {self.steer_gain_l:g} "
+            f"우 {self.steer_gain_r:g} · "
             f"출발은 RTK Fixed 에서만, 주행 중 {Q_LABEL[self.run_min_q]} 이상이면 계속 · "
             f"안테나 = 뒷차축 앞 {self.ant_base:.2f} m · 도착 {self.wp_reach} m · 이탈 {self.cte_dev} m | "
             f"경로 폴더 {self.data_dir}")
@@ -570,6 +629,27 @@ class DrivingNode(Node):
     # ══════════════════════════════════════════════════════════════════════════
     #  명령 (prompt)
     # ══════════════════════════════════════════════════════════════════════════
+    def cb_joy318(self, msg: Int32):
+        """조이스틱 SWA ON — 자율주행 중이면 멈추고 /cmd_vel 을 그친다(조이스틱이 차를 쥔다)."""
+        if int(msg.data) != 1:
+            return
+        self.joy_t = time.time()
+        if self.state in DRIVE_STATES:
+            self.enter(S_IDLE, "🎮 조이스틱 개입(SWA ON) — 자율주행 중지, /cmd_vel 발행을 그친다")
+
+    def cb_estop(self, msg: Int32):
+        on = int(msg.data) == 1
+        if on == self.estop:
+            return
+        self.estop = on
+        if on and self.state in (S_DRIVE_HEADING, S_DRIVE_RUN):
+            self.enter(S_DRIVE_DONE, "🛑 E-STOP — 자율주행 종료 (원격 E-STOP)")
+        else:
+            self.event("🛑 E-STOP 발동 — 출발을 막는다" if on else "✅ E-STOP 해제")
+
+    def joy_on(self, now):
+        return now - self.joy_t < JOY_ON_GAP_S
+
     def cb_drive_cmd(self, msg: String):
         cmd = str(msg.data).strip()
         if not cmd:
@@ -589,7 +669,7 @@ class DrivingNode(Node):
             if self.state != S_IDLE:
                 self.event(f"⚠️ 매핑 시작 실패 — 현재 상태 {self.state}(IDLE 에서만 가능)")
             else:
-                self.enter(S_MAP, "🗺️ 매핑 시작 — 손으로 전진으로 몰 것")
+                self.enter(S_MAP, "🗺️ 매핑 시작 — 조이스틱(SWA ON)으로 몰 것. GPS 궤적만 적는다")
             return
         if up == 'MAP_STOP':
             if self.state == S_MAP:
@@ -601,7 +681,7 @@ class DrivingNode(Node):
                 self.event(f"⚠️ 주행 시작 실패 — {why}")
                 return
             self.enter(S_DRIVE_HEADING,
-                       f"▶ 주행 시작 [{self.route_name}] — 조향 0 으로 곧게 {self.heading_speed * 3.6:.0f} km/h, "
+                       f"▶ 주행 시작 [{self.route_name}] — 조향 0 으로 곧게 {self.heading_speed * self.ppm:.0f} 펄스, "
                        f"헤딩을 잡을 때까지")
             self.event(f"📶 출발 GPS : {Q_LABEL.get(self.gps_q, '?')} hAcc {self.gps_hacc:.3f} m")
             return
@@ -616,6 +696,10 @@ class DrivingNode(Node):
             return f"현재 상태 {self.state} (IDLE 에서만 가능)"
         if not self.raw_wps:
             return "경로가 선택되지 않았다"
+        if self.estop:
+            return "E-STOP 이 걸려 있다 — 웹(domiman.duckdns.org/estop)이나 채팅방에서 GO 로 푼 뒤 출발"
+        if self.joy_on(now):
+            return "조이스틱 SWA 가 ON 이다 — 조이스틱이 차를 쥔다. SWA 를 눌러 OFF 로 한 뒤 출발"
         if now - self.fix_time > GPS_TIMEOUT_S:
             return "GPS 위치가 안 들어온다 (broon/gps 노드 · 전방 GPS 확인)"
         if self.gps_q < Q_FIXED or self.lat0 is None:
@@ -647,6 +731,11 @@ class DrivingNode(Node):
         if len(clean) < need:
             self.event(f"❌ 웨이포인트가 부족하다({len(clean)}개): {name}")
             return
+        # ★경로 = 전방 안테나 궤적★ → 뒷차축 궤적 (제어 기준점이 뒷차축이다)
+        la0, lo0 = clean[0]
+        ant = [latlon_to_xy(la, lo, la0, lo0) for la, lo in clean]
+        rear = antenna_path_to_rear(ant, self.ant_base, loop)
+        clean = [xy_to_latlon(x, y, la0, lo0) for x, y in rear]
         self.route_name, self.raw_wps, self.route_loop = name, clean, loop
         steps = [math.hypot(*latlon_to_xy(b[0], b[1], a[0], a[1])) for a, b in zip(clean, clean[1:])]
         length = sum(steps)
@@ -830,7 +919,7 @@ class DrivingNode(Node):
             return
         ramp = min(1.0, (now - self._head_go_t) / HEADING_RAMP_S)
         v_cmd = max(SAFE_STOP_SPEED, self.heading_speed * ramp)
-        # ★조향 0 = 트림 보정된 직진★ (δ_ctrl 0 → 발행식이 black 실측 트림 −1.5° 를 상쇄)
+        # ★조향 0 = 트림 보정된 직진★ (δ_ctrl 0 → 발행식이 steer_trim_deg 를 상쇄. 기본 트림 0)
         self.send(v_cmd, 0.0)
         self.head_odo += abs(self.current_speed(now)) / CONTROL_HZ
 
@@ -1371,19 +1460,19 @@ class DrivingNode(Node):
     #  발행
     # ══════════════════════════════════════════════════════════════════════════
     def send(self, speed_ms, steer_deg, raw=False):
-        """black publish_cmd — δ_pub = (δ_ctrl − TRIM)/GAIN (좌우 게인 분리). raw 면 보정 없이 그대로.
-        ★속도는 km/h 로 내보낸다★ — broon/arduino 가 정수 km/h · 정수 도로 반올림해 보낸다."""
-        speed_ms = max(-self.max_speed, min(self.max_speed, float(speed_ms)))
+        """black publish_cmd — δ_pub = (δ_ctrl − 트림)/게인 (좌우 게인 분리). raw 면 보정 없이 그대로.
+        ★우노 규약으로 내보낸다★ — /cmd_vel = [펄스 0 ~ 92, 조향 −21 ~ 21 (− 좌 · + 우)] 정수.
+        안의 조향은 black 그대로 + 좌라 부호를 뒤집는다. 속도는 m/s × pulse_per_mps 를 반올림한다."""
+        speed_ms = max(0.0, min(self.max_speed, float(speed_ms)))      # 후진은 내지 않는다
         if raw:
             steer_out = float(steer_deg)
         else:
-            gain = STEER_PLANT_GAIN_R if steer_deg < 0.0 else STEER_PLANT_GAIN_L
-            steer_out = (float(steer_deg) - STEER_TRIM_DEG) / max(0.5, gain)
+            gain = self.steer_gain_r if steer_deg < 0.0 else self.steer_gain_l
+            steer_out = (float(steer_deg) - self.steer_trim) / gain
         steer_out = max(-STEER_MAX_DEG, min(STEER_MAX_DEG, steer_out))
-        msg = Twist()
-        msg.linear.x = speed_ms * 3.6
-        msg.angular.z = steer_out
-        self.pub_cmd.publish(msg)
+        pulse = max(0, min(self.cruise_pulse, int(round(speed_ms * self.ppm))))
+        steer = max(-STEER_MAX, min(STEER_MAX, -int(round(steer_out))))
+        self.pub_cmd.publish(Int32MultiArray(data=[pulse, steer]))
         self.last_published_speed = speed_ms
 
     def shutdown(self):

@@ -32,15 +32,26 @@
 hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 ├── AGENTS.md · CLAUDE.md
 ├── src/                       ROS 2 패키지 (colcon 이 빌드하는 것은 여기뿐)
-│   ├── broon/                 ★하드웨어★ — 아두이노 브리지 · GPS 노드 · GPS 배치 설정 GUI · 장치 점검
+│   ├── broon/                 ★하드웨어★ — 차를 움직이는 것은 broon 만으로 된다 (2026-11-19 개편, 사용자 지정)
+│   │                            arduino(판별 · 구동 우노 브리지) · joy(조이스틱 → /cmd_vel + 화면) · record(기록 CSV) ·
+│   │                            estop(원격 E-STOP — domichat) · gps · gps_setting · check · kill,
+│   │                            launch/broon.launch.py(= joy · arduino · record · estop), ros2bag/(기록)
 │   ├── white/                 단일 GPS(뒷차축 위) + IMU + 아두이노 Mega(문자열 규약)          [2026-11-09]
-│   ├── white1/                단일 GPS(전방 안테나), IMU 없음, 하드웨어는 broon              [2026-11-11]
-│   └── white2/                듀얼 GPS(전방 + 후방 안테나), IMU 없음, 하드웨어는 broon        [2026-11-11]
+│   ├── white1/                ★자율주행 알고리즘★ — 단일 GPS(전방 안테나), IMU 없음, 하드웨어는 broon [2026-11-11, 11-19 개편]
+│   │                            driving · mapping · prompt · pose · paths, launch/one.launch.py
+│   └── white2/                듀얼 GPS(전방 + 후방 안테나), IMU 없음 [2026-11-11] ★11-19 broon 개편 전 구조 그대로 — /cmd_vel_raw(km/h)
+│                                라 지금 broon/arduino 로는 차가 안 움직인다. 나중에 다시 만든다(사용자 지정 2026-11-19)★
 ├── tool/                      ROS 가 아닌 도구 · 시험 기록 (2026-11-11 루트에서 옮겼다)
 │   ├── gps_mapper.py          단일 GPS 매핑 · 고정점 검증 기록 GUI (Windows · Ubuntu)
 │   ├── gps_mapper_dual.py     GPS 2대 동시 기록 — ★옛 CSV 양식 그대로★ (gps_mapper.py 와 같은 폴더에 둬야 돈다)
 │   ├── reminding.py           고정점 검증 기록 분석 GUI (새 양식의 point_*.csv 만 읽는다)
 │   ├── gpstest.py             F9P + NTRIP 측정 스크립트
+│   ├── joy.py                 조이스틱 '메가'(joy.ino) → 구동 '우노'(arduino_code/dualtest_1118.ino) 중계 + 화면 (2026-11-18, mad PC 의 joy_gold.py 를 고침).
+│   │                            "J," 줄을 보내는 아두이노 = 조이스틱, 나머지 = 구동. L 세로 → 펄스 ±92, R 가로 → 조향 ±21°(정수), 바뀌면 곧바로 + 0.2 s 마다 우노로.
+│   │                            OFF · 보정 중 · 끊김 · 닫기 → "0 0". 우노 출력을 "U,펄스,각" 으로 메가 LCD 에 넘긴다. --joy/--drive 로 포트 지정, --nogui
+│   ├── joy.ino                조이스틱 '메가' 2560 (2026-11-18, mad PC 의 joy4.ino 를 고침) — 4 ms(250 Hz)마다 "J,x1,y1,k1,x2,y2,k2,swa,swb,on".
+│   │                            SWA = ON/OFF(켜면 OFF), SWB = 타이머(짧게 시작·일시정지·재개, 1 초 길게 0) — 둘 다 보드 안에서. I2C LCD 16×2(0x27/0x3F)
+│   │                            "00:00:00     OFF" / "REF:+35 -12 00km"(속도계 00 고정). ★라이브러리 "LiquidCrystal I2C"(Frank de Brabander) 필요★
 │   ├── arduino_code.ino       white 용 Mega 펌웨어 초안(white_fw) — ★보드에 올린 적 없다★
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트(CHANGE)로 A · B 상 에지 수를 1 s 마다 따로 (11-16 바꿈)
@@ -52,6 +63,19 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   │                            pulse_test_1118.ino          : 구동 속도 PID 튜닝 (2026-11-18) — 핀은 pulsetest_interrupt 와 같다(PWM 5 · DIR 6 · 엔코더 2 · 3).
 │   │                                                           REF · 측정 = '최근 100 ms A+B 에지 수'(10 ms 마다 이동창), REF 부호 = 방향, PWM 0 ~ 상한.
 │   │                                                           레거시 구동 PID 엔 와인드업 방지가 없어 조건부 적분으로 바꿨다. 출력은 "REF 측정 PWM"(PWM 음수 = 역방향) 뿐. 기본 Kp 3 · Ki 30 · Kd 0
+│   │                                                           |PWM| 이 줄 때만 변화율 제한 `r`(기본 1000 PWM/s, 막힌 동안 I 멈춤) — 이 드라이버는 낮은 PWM 이면 제동이 걸려
+│   │                                                           감속 충격이 났다(11-18). REF 0 은 그 제한대로 서고 `s` 는 바로 선다. 1000 으로 실차 감속 시험 OK(사용자) → dualtest 에도 옮겼다
+│   │                            dualtest_1118.ino            : 주행 · 조향 동시 제어 (2026-11-18) — pulse_test_1118 + steer_test_1116 을 합쳤다(핀 · PID · 게인 그대로, 게인 명령 없음).
+│   │                                                           입력 "목표펄스 목표조향각"(둘 다 정수만 — 소수점이 든 줄은 통째로 버린다, 예 35 -20, |펄스| ≤ 92 · 각 ±21 로 자른다, s = 둘 다 정지),
+│   │                                                           출력 "목표펄스 목표조향각 실제펄스 실제조향각" 뿐. 실차에서 방향 · 부호 정상(11-18 사용자).
+│   │                                                           주행에 pulse_test 의 하강 제한 1000 PWM/s 를 고정값(`DRV_DN_RATE`)으로 넣었다 — 목표 펄스 0 은 그대로 서고 s 는 바로
+│   │                            broon_1119.ino               : 전방 · 후방 구동 + 조향 (2026-11-19) — dualtest_1118 에 후방 구동 드라이버(PWM 9 · DIR 7)를 더했다.
+│   │                                                           후방은 엔코더 없이 전방 PID 출력과 같은 DIR 수준 · 같은 PWM. 입출력 형식은 dualtest 그대로(joy.py 그대로 쓴다).
+│   │                                                           명령 시한 `CMD_TIMEOUT_MS`(기본 2000) : 올바른 줄이 그동안 없으면 구동 둘을 바로 PWM 0(하강 제한 없이), 조향은 마지막 목표각 유지.
+│   │                                                           버린 줄은 시한을 늘리지 않고, 다음 올바른 줄이 오면 다시 달린다
+│   │                            pulsetest_quad_1118.ino      : A · B 위상차 계측 (2026-11-18) — 핀 · PWM 입력은 pulsetest_interrupt 와 같다.
+│   │                                                           RISING 인터럽트 + micros, A 상승마다 "(B↑ − 앞 A↑) / A 주기 × 360" 을 곧바로 한 줄(−179.9 ~ 180.0, 부호 = 방향).
+│   │                                                           카운터 클릭 x4 가 되는지 보려고 만들었다 — LS7366R 은 90° 가 '이상값', 조건은 에지 간격 t4 > t3 (5 V 26 ns)
 │   │                            legacy_white.ino             : ★백업★ Mega 종합 주행 펌웨어 '하네스 T8 PID Control Vr.1'
 │   │                                                           (`~/Arduino/arduino_backup/arduino_backup.ino` 2026-05-13 을 그대로 복사, 고치지 않는다)
 │   ├── info.md                장비 · NTRIP 접속 정보 · GPS 칩 고유 ID
@@ -64,30 +88,40 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
   (`git sparse-checkout list` → `/*`, `!/white/`). 워크스페이스 안에 같은 이름의 패키지가 둘이면 colcon 이
   "Duplicate package names" 로 멈추기 때문이다. 다른 곳에 새로 clone 하면 `white/` 가 풀리므로 같은 설정을 하거나
   `white/COLCON_IGNORE` 없이 빌드하지 말 것.
-- 패키지마다 경로 · 기록 폴더가 따로다 : `src/<패키지>/gps_data`(경로 CSV), `src/<패키지>/ros2bag`(주행 기록).
+- 경로 CSV 는 패키지마다 `src/<패키지>/gps_data`. 주행 기록은 white1 부터 ★`src/broon/ros2bag`★ 한 곳(broon/record — 수동 `rec_*` ·
+  자율 `route_*`). white · white2 는 아직 각자 `src/<패키지>/ros2bag`.
 
 ## A2. 패키지 · 실행
 
 | 패키지 | 구성 | 헤딩 | 아두이노 |
 |---|---|---|---|
 | `white` | GPS 1대(뒷차축 위) + IMU(iAHRS) | 직진 초기화 → 자이로 적분 + GPS 로 보정 | Mega, 문자열 `C,틱,조향` 115200 bps, 바퀴 속도 수신 |
-| `white1` | GPS 1대(★전방★ — 뒷차축에서 `antenna_base_m` 앞) | 직진 초기화 → 전방 안테나 궤적으로 뒷차축 · 헤딩 추적 | `broon/arduino` (새 4바이트 규약) |
-| `white2` | GPS 2대(전방 + ★후방 = 뒷차축 위★) | 후방 → 전방 방향. 서서 확정. 한쪽이 Float 면 Fixed 쪽 기준 | `broon/arduino` |
-| `broon` | 하드웨어 노드 · 도구 | — | — |
+| `white1` | GPS 1대(★전방★ — 뒷차축에서 `antenna_base_m` 앞) | 직진 초기화 → 전방 안테나 궤적으로 뒷차축 · 헤딩 추적 | `broon/arduino` — `/cmd_vel` [펄스, 조향] 정수 |
+| `white2` | GPS 2대(전방 + ★후방 = 뒷차축 위★) | 후방 → 전방 방향. 서서 확정. 한쪽이 Float 면 Fixed 쪽 기준 | ★옛 `/cmd_vel_raw` km/h — 지금 broon 과 안 맞는다★ |
+| `broon` | 하드웨어 노드 · 도구 (arduino · joy · record · gps · gps_setting · check · kill) | — | — |
 
 ```bash
 ros2 run broon gps_setting              # 전방 · 후방에 어느 GPS(칩 ID)를 달았는지 — GUI, [저장] 을 눌러야 반영
-ros2 run broon check [--dual] [--arduino]   # 런치 전 장치 점검 (white1 · white2 용)
-ros2 launch white1 one_launch.py        # 그리고 별 터미널에서  ros2 run white1 prompt
-ros2 launch white2 one_launch.py        #                      ros2 run white2 prompt
+ros2 run broon check [--dual] [--no-joy]    # 런치 전 장치 점검 — GPS · 구동 아두이노 · 조이스틱
+ros2 launch broon broon.launch.py       # 손으로 몰기 + 수동 기록 (joy · arduino · record) — GPS 는 별도 ros2 run broon gps
+ros2 run broon record                   # 수동 기록만 — 아무 키 · Ctrl+C 로 저장하고 끝 (rec_<연도월일>_<시분초>.csv)
+ros2 run broon kill [--dry-run]         # 남은 ROS2 를 한 번에 정리 (gold nxde kill 과 같은 기능)
+ros2 run broon estop                    # 원격 E-STOP 만 (두 런치가 함께 띄운다 — use_estop:=false 로 끈다). 웹 domiman.duckdns.org/estop
+ros2 launch white1 one.launch.py        # 자율주행 (gps · arduino · joy · driving · mapping · record) — 별 터미널에서 ros2 run white1 prompt
+ros2 launch white2 one_launch.py        # ★옛 구조 — 지금 broon 과 안 맞는다(위 표)★
 ros2 launch white  one_launch.py        #                      ros2 run white  prompt   (IMU · Mega 구성. 점검은 ros2 run white check)
 ```
 
-- 세 패키지 모두 노드 구성이 같다 : `gps`(white 는 자기 것, white1 · white2 는 `broon/gps`) · `arduino` · `driving` · `mapping` · `record` + 별 터미널의 `prompt`.
-  `white1` · `white2` 의 런치가 `package='broon'` 으로 gps · arduino 를 띄운다(gold 리포의 white1 · white2 가 nxde 의 arduino 를 띄우는 것과 같은 구조).
+- 노드 구성 : `gps` · `arduino` · `driving` · `mapping` · `record` + 별 터미널의 `prompt` (white1 은 여기에 `broon/joy`).
+  white1 은 gps · arduino · joy · record 를 `package='broon'` 으로 띄운다(gold 리포의 white1 이 nxde 의 arduino 를 띄우는 것과 같은 구조).
+  white 는 자기 gps · arduino · record, white2 는 broon 의 gps · arduino + 자기 record(옛 구조).
 - 경로추종 제어는 셋 다 **black_ws22 `driving.py` v6.7.3** (순수추종 + PID, 휠베이스 0.73 m, 기준점 = 뒷차축) 그대로다. 상태기계는 gold white1.
-- `prompt` 메뉴 : 1) 매핑 2) 주행 3) 경로 목록. 주행 기록은 `record` 가 자율주행 구간마다 `ros2bag/<경로>-<시각>.csv` 로 남긴다.
-- **경로 CSV 는 어느 패키지에서든 '뒷차축이 지나간 길' 이다** — white 는 안테나가 뒷차축 위, white1 은 전방 안테나 궤적을 뒷차축으로 환산, white2 는 후방 GPS 원값.
+- `prompt` 메뉴 : 1) 매핑 2) 주행 3) 경로 목록. white1 의 주행 기록은 `broon/record`(mode:=drive)가 자율주행 구간마다
+  `src/broon/ros2bag/route_<매핑>_<연도월일>_<시분초>.csv` 로 남긴다(white · white2 는 옛 `<경로>-<시각>.csv`).
+- **경로 CSV 의 뜻이 패키지마다 다르다** — white : 뒷차축 위 안테나 = 뒷차축. white2 : 후방 GPS 원값 = 뒷차축.
+  ★white1 (2026-11-19 부터) : 전방 안테나가 지나간 GPS 궤적 그대로★ — driving 이 경로를 고를 때 뒷차축 궤적으로 바꾼다
+  (`driving.antenna_path_to_rear`, 견인 기하). 11-11 판 white1 mapping 이 만든 파일(뒷차축으로 환산해 적은 것)은 지금 driving 으로 달리면
+  안테나 거리만큼 한 번 더 옮겨진다 — 그런 파일은 없었다(gps_data 비어 있었음).
 
 ### white1 · white2 가 white 와 다른 점 (사용자 지정 2026-11-11)
 
@@ -96,7 +130,13 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
   **주행 중에는 Float 여도 계속 간다.** Float 미만(단독 · DGNSS) · 두절이면 서서 기다렸다 그 자리에서 재개한다.
 - white2 : 한쪽이 Float · 두절 · 오고정(둘 다 Fixed 인데 간격이 틀림)이면 **믿을 수 있는 쪽 하나로** 간다 —
   그쪽에서 헤딩 방향으로 안테나 간격만큼 떨어진 곳이 다른 안테나 자리다(사용자 표현 "1 m 보간").
-- 명령 단위는 **km/h · 도**. `/cmd_vel_raw` 의 `linear.x` 가 km/h 다(white 는 m/s). 정수로 반올림돼 나가므로 속도는 4 · 5 · 6 km/h 단계다(순항 6, 최저 4).
+- ★white1 (2026-11-19 부터)★ 명령은 우노 규약 그대로 **펄스 · 도 정수** — `/cmd_vel`(Int32MultiArray) = [펄스 0 ~ 92, 조향 −21 ~ 21 (− 좌 · + 우)].
+  안의 계산은 black 그대로 m/s · 도(+ 좌)이고 `send()` 에서 바꾼다. 펄스 = m/s × `pulse_per_mps`(★추정 45, 미검증★).
+  속도 인자 `cruise_pulse` 75 · `min_pulse` 50 · `heading_pulse` 50 (옛 6 · 4 · 4 km/h). 조향 보정은 중립(트림 0 · 게인 1.0 · 상한 21°).
+  white2 는 옛 그대로 km/h · 도(`/cmd_vel_raw`).
+- ★조이스틱(white1)★ — SWA ON 이면 broon/joy 가 `/cmd_vel` 을 내고 `/joy318`(Int32 1)을 0.1 s 마다 낸다. SWA OFF 면 스틱을 무시한다.
+  driving 은 `/joy318` 을 들으면 자율주행을 멈추고 `/cmd_vel` 을 그친다 → IDLE. ON 인 동안은 출발을 거절한다.
+  → 자율주행은 SWA OFF 에서만 돌고, 조이스틱이 자율을 멈추는 때는 ON 으로 바꾸는 순간뿐이다(사용자 지정 2026-11-19).
 
 ## A3. 하드웨어 · 규약
 
@@ -108,30 +148,50 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 | 안테나 자리 | white : 뒷차축 위 / white1 : 전방(뒷차축 앞 `antenna_base_m`) / white2 : 전방 + 후방(뒷차축 위), 간격 `antenna_base_m` |
 | 안테나 간격 | **1.0 m** (사용자 지정 2026-11-11). ⚠️ 휠베이스 0.73 m 와 다르다 — 안테나가 정확히 두 차축 위라면 같아야 한다. **실측 필요**(A5) |
 | IMU | iAHRS (CP210x) — `white` 만 쓴다 |
-| 아두이노 (새) | **UNO R4 Minima 예정**, 펌웨어 미완성. `broon/arduino.py` 의 규약은 ★가작성★ |
+| 아두이노 (새) | 구동 **UNO R4 Minima** = `tool/arduino_code/broon_1119.ino`(전방 · 후방 구동 + 조향), 조이스틱 **Mega 2560** = `tool/joy.ino`. 규약 아래 절 |
 | 아두이노 (지금 차) | Mega 2560, **115200 bps 로 도는 v6 계열 스케치**(2026-11-09 포트를 직접 들어 확인. 원본 소스는 어디에도 없다). `~/Arduino/arduino_backup`(Vr.1, 57600)이 아니다 |
 | 조향 가변저항 | Mega **A15**. Vr.1 코드값(`legacy_white.ino`) : `analogRead − 512` 를 **−460 ~ 423** 으로 자른다 = ADC **52 ~ 935** (5 V 기준 0.25 ~ 4.57 V) ↔ **−19° ~ +19°** 직선. 0° 는 ADC 493.5 (512 가 아니다), 1° ≈ 23 카운트. 한계에 닿으면 조향 모터를 양방향 다 끈다. ★코드값일 뿐 실측 아니다★ (2026-11-12 확인) |
 | 조향 (새 R4) | 모터 드라이버 **Cytron MD20A, PWM 10 · DIR 8** (레거시 Mega 와 다른 모델). MD20A 는 DIR Low → MA 출력 High(데이터시트 표 3), 이 차는 MA 버튼 = 우 · MB = 좌 → **DIR LOW = 우**. PWM Low = 브레이크. 가변저항 **A0** : **좌 끝 ADC 954 (실측 2026-11-16)** · 우 끝 ADC 52 (Vr.1 값, 미실측) → **값이 클수록 좌** (레거시 코드는 52 쪽을 LEFT 로 불렀다 — 이름이 반대). 이를 **−21° ~ +21° (− 좌 · + 우)** 로 잇는다 — 실제 바퀴 각은 나중에 실측해 고친다 (사용자 지정 2026-11-16, `steer_test_1116.ino`). 기구 끝에서는 모터가 헛돌 뿐이라 **소프트웨어 끝 보호는 넣지 않는다** (사용자 지시). 조향 PID 실차 시험(2026-11-16) : 넘침 없음(감쇠 충분), 움직이기 시작하는 PWM ≈ 10(가운데) ~ 25(±18°), Kp 8 · Ki 10 은 I 가 다음 동작으로 넘어가 복귀가 느림 → 기본값 Kp 12 · Ki 20 · Kd 0 (모형 시뮬레이션 제안, 실차 확인 전) |
 | 제어 PC | MSI Katana 노트북, Ubuntu 22.04, ROS 2 Humble |
 
-### 새 아두이노 규약 (가작성 — `src/broon/broon/arduino.py` 머리말이 정본)
+### 아두이노 규약 (2026-11-19 — 정본은 `src/broon/broon/boards.py` 머리말)
 
-- PC → 아두이노 **4바이트** : `0xAA` · 속도 `int8`(km/h, ±16) · 조향 `int8`(도, ±25, + 좌) · 체크섬(속도 + 조향 바이트의 합 mod 256).
-  사용자 지정은 "시작바이트 · 속도 · 조향 · 체크섬, int16 보다 줄일 수 있으면 줄인다" 였다 → 범위가 작아 int8 로 했다.
-  시작바이트 값 · 체크섬 계산 · 조향 부호는 PC 쪽에서 임시로 정한 것이다 — 펌웨어가 나오면 맞춘다.
-- **주기 없이** 값이 바뀌면 즉시 보내고, 그대로여도 **1초에 한 번** 같은 값을 다시 보낸다. 아두이노에는 3초 무수신 시 정지하는 안전 코드가 들어갈 예정이다.
-- 아두이노 → PC 는 정해진 것이 없다(= **바퀴 속도 피드백 없음**).
-- 리모컨은 ROS 가 판정하지 않는다(2026-11-09 사용자 결정 : 아두이노가 모든 권한).
+- **판별** : 보드 종류와 상관없이 `J,` 로 시작하는 줄을 보내는 아두이노 = 조이스틱, 나머지 아두이노 = 구동(사용자 지정).
+  `broon/arduino` 가 판별하고 조이스틱 포트는 `/joy_port`(래치)로 `broon/joy` 에 넘긴다(메가는 포트를 열 때마다 리셋된다 — 두 번).
+- **PC → 구동 우노** : `"<펄스> <조향>\n"` 두 정수(소수점이 든 줄은 우노가 버린다). `broon/arduino` 는 `/cmd_vel` 을 받는 즉시 한 줄 보내고
+  ★스스로 되풀이하지 않는다★ — 명령을 내는 노드가 죽으면 우노의 명령 시한(2 초, 구동 PWM 0 · 조향 유지)이 세운다.
+- **구동 우노 → PC** : 50 ms 마다 `"<받은 펄스> <받은 조향> <실측 펄스> <실측 조향각>"` → `/enc_pot`(Float64MultiArray 4칸).
+- **조이스틱 메가 → PC** : 4 ms 마다 `J,x1,y1,k1,x2,y2,k2,swa,swb,on`. PC → 메가 : `U,<펄스>,<조향>`(LCD).
+- 토픽 : `/cmd_vel`(Int32MultiArray [펄스, 조향] — joy · driving 이 내고 arduino 가 받는다. 길이 · 범위가 틀리면 버린다) ·
+  `/enc_pot` · `/joy318`(Int32 1) · `/joy_port` · `/arduino_status`.
+- 2026-11-11 의 4바이트 바이너리 규약(0xAA · km/h · + 좌)은 버렸다. white2 는 아직 그 시절 토픽(`/cmd_vel_raw`)을 낸다.
+- 리모컨은 ROS 가 판정하지 않는다(2026-11-09 사용자 결정). 조이스틱은 위 `/joy318` 로만 자율주행에 끼어든다.
+
+### 원격 E-STOP (2026-11-19 — 정본은 `src/broon/broon/estop.py` 머리말)
+
+- `broon/estop` 이 domichat 서버(domiman.duckdns.org:47821, TLS 1.2 · 지문 고정 `~/.broon_estop_server_fp.json`)에 계정 `broon_hl_ws` 로
+  붙어 방 `domi_fishing_broon`(비밀번호 제한방, 낚시방 비밀번호 규칙)을 만들거나 들어가 구독한다. 계정 · 비밀번호는 estop.py 상수(공개해도 된다 — 사용자).
+- 방에서 `STOP` → `/estop`(Int32 래치) 1 + 방에 `STOP`, `GO` → 0 + `GO`, `STATUS` → 지금 상태를 답한다. 자기 말은 무시, 들어올 때 상태를 한 번 알린다.
+  켜면 GO. ★채팅이 끊겨도 /estop 은 마지막 상태를 유지한다★(끊김 = 정지가 아니다 — 사용자가 정하지 않았다).
+- `/estop` 1 이면 : arduino → 우노에 `s`(구동 · 조향 PWM 즉시 0) 뒤 `0 0`(조향 0°), 해제까지 `/cmd_vel` 을 막고 `0 0` 을 0.5 s 마다.
+  driving → 자율주행 종료(DRIVE_DONE → IDLE), 1 인 동안 출발 거절. record → 세 방식 모두 `estop` 열. joy 화면에 표시.
+- 웹 `domiman.duckdns.org/estop`(비밀번호 1234, 'web' 계정이 방을 전담)은 xeon 세션이 만든다 — 사양은 그 세션 C:\web 문서.
 
 ## A4. CSV 양식
 
 - **매핑(경로) CSV** : `lat,lon,alt,dir,mod,olt,oon,oat` 8열(2026-11 양식). 정본은 궤적 사이트 쪽(xeon PC `C:\web\apps\gps\CLAUDE.md`).
   `dir` 0 전진 · 1 후진, `mod` 구역 단어(`;` 로 여럿, 마지막 줄 `return` = 순환). 숫자는 고정소수점만, 따옴표 없음, UTF-8, LF.
   **옛 17열(`latitude,longitude,…`)은 읽지 않는다**(레거시 호환 없음). 매핑 파일에는 RTK 품질을 넣지 않는다(사용자 결정).
+  ★white1 mapping (2026-11-19)★ : 전방 안테나 GPS 궤적 그대로 0.25 m 마다, `dir` = `/cmd_vel` 펄스 부호(+ 0 · − 1), 헤딩을 잡지 않는다.
+  이름 `map_<일련번호>.csv` — 끝낼 때 prompt 가 묻는다(그냥 Enter = `map_<연도월일>_<시분초>.csv`, 421 = `map_421.csv`, 영문 · 숫자 · `._-`).
 - **고정점 검증 CSV**(`tool/gps_mapper.py` 검증 모드) : 위 8열 + `rtk`(3 Float · 4 Fixed) · `gps_sigma_m` · `t_rel`.
 - **주행 기록 CSV**(`record`) : 20 Hz 스냅샷, `fix_lat` · `fix_lon` 열로 사이트가 주행 기록임을 알아본다. 열 목록은 각 `record.py` 머리말.
+  ★`lat` · `lon` 열을 두지 말 것★(사이트가 매핑으로 읽는다), 문자열에 `<` 를 쓰지 말 것(서버 올리기가 거절한다) — xeon 세션 2026-11-19.
+  broon/record (2026-11-19) : `vehicle`=broon 열로 사이트가 hl 차량 상수(축거 0.73 · 조향 ±21 · 펄스 그대로)를 고른다.
+  명령 `cmd_pulse` · `cmd_steer_deg`(PC) / 우노가 받은 `ref_pulse` · `ref_steer_deg` / 실측 `meas_pulse` · `steer_measured_deg`.
+  후방 GPS(듀얼일 때) `fix_lat2` · `fix_lon2` · `gps_quality2` · `gps_sigma_m2` … → 사이트 왼쪽 '듀얼 GPS 궤적 비교' 단추(기본 전방만).
 - 궤적 사이트 : `https://domiman.duckdns.org/gps/` (`#csvgz=` 링크를 받는다). 옛 `cheongbaek.github.io/find_wc` 는 내려갔다.
-- `driving` 은 `mod` 의 `return`(순환 주행)만 구현했다. 구역 단어는 알리기만 하고 동작은 없다. 후진(`dir` 1)은 지원하지 않는다.
+- `driving` 은 `mod` 의 `return`(순환 주행)만 구현했다. 구역 단어는 알리기만 하고 동작은 없다. 후진(`dir` 1)은 지원하지 않는다(알리고 전진으로 따른다).
 
 ## A5. ★미검증 · 실측이 필요한 것★
 
@@ -139,15 +199,30 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 
 - [ ] **안테나 간격 · 자리** : `antenna_base_m`(기본 1.0). white2 는 출발 때 실측 평균을 알려 준다 — 그 값으로 맞춘다. white1 은 뒷차축 → 안테나 거리를 줄자로.
 - [ ] **휠베이스** 0.73 m 가 지금 차에 맞는지(레거시 코드 값). 안테나가 두 차축 바로 위라면 간격과 같아야 한다.
-- [ ] **새 아두이노 규약** : 시작바이트 · 체크섬 · 조향 부호 · 조향 눈금(도가 실제 각도인지) · 대기 중 0·0 송신이 손 조종을 방해하는지(`idle_heartbeat`).
-- [ ] black 의 조향 트림(−1.5°) · 게인(0.85 / 0.82)이 새 보드에서도 맞는지. 정수 km/h 명령(4 · 5 · 6)으로 속도 제어가 되는지.
+- [ ] **broon 개편(2026-11-19)** : arduino · joy · record · check · kill 과 white1 driving · mapping · prompt 를 가짜 시리얼 포트(가짜 메가 · 우노)와
+      가상 차량(자전거 모형 + 가짜 GPS)으로만 돌려 봤다 — 판별 0.5 s, SWA OFF 무시 · ON 순간 "0 0" · 스틱 0 이면 0.5 s 뒤 조용,
+      잘못된 /cmd_vel 버림, 매핑 → map_421 저장 · 같은 번호 거절, 주행 안테나 ↔ 매핑 궤적 평균 0.16 ~ 0.19 m(환산값을 ±20 % 틀려도),
+      /joy318 즉시 IDLE · ON 중 출발 거절, rec_ · route_ 기록. ★실제 메가 · 우노 · GPS 로는 아직 안 돌렸다★.
+- [ ] `pulse_per_mps`(1 m/s = 45 펄스) 는 추정 — 곧게 달린 기록의 `gps_kmh` 와 `meas_pulse` 로 맞춘다. 조향 트림 · 게인(지금 중립)도 실차로.
+- [ ] 조향 눈금 : 가변저항 ±21° 가 실제 바퀴각인지 (driving 의 순수추종은 이 값을 바퀴각으로 본다).
+- [ ] 조이스틱 개입 : SWA ON 순간 "0 0" 마무리와 driving 의 마지막 명령이 겹칠 때 차가 곧 서는지(가상에서는 경합 0개).
+- [ ] white2 를 새 broon 규약(/cmd_vel 펄스 · /joy318 · broon/record)으로 다시 만든다 — 사용자가 '나중에' 로 미뤘다.
+- [ ] 원격 E-STOP(2026-11-19) : 가짜 domichat 서버(TLS)로만 확인했다 — 방 만들기 · STOP/GO/STATUS · 되먹임 없음 · 재접속 뒤 상태 알림 ·
+      우노 's' + '0 0' · /cmd_vel 막기 · driving 종료 · 기록 열. ★실제 서버 · 웹 · 실차로는 아직★. 방 비밀번호는 domiman 리포(11-01)의
+      FISHING_ROOM_PW 를 따랐다 — 실서버와 다르면 estop.py 상수를 고친다. 차의 인터넷(LTE 등)이 끊기면 원격 정지가 안 된다.
 - [ ] white1 : 전방 안테나 추적(견인 기하)의 실제 헤딩 정확도, 매핑을 전진으로만 해야 하는 제약.
 - [ ] white2 : 듀얼 헤딩 잡음, 한쪽 Float · 오고정에서의 실제 거동, `base_tol_m`(0.2).
 - [ ] Float 로 계속 달릴 때의 실제 오차(시험에서는 0.6~2.7 m 였다 — B부 5.4절).
 - [ ] white : 실차 주행(순환 포함), 엔코더 300틱/회전, `tool/arduino_code.ino` 는 컴파일만 했다.
 - [ ] `tool/arduino_code/` 의 시험 스케치(`pulsetest_*_1112` · `analog_input` · `master_test_input`) : 컴파일 · 업로드 전부 안 했다. 카운터 클릭 EN 핀 · 3.3/5 V 점퍼, 핀 번호(모터 2 · 3 · CS · EN 은 임의 자리표시),
       interrupt 판의 `R_IOPORT_PinCfg` 풀업 재설정이 R4 코어에서 컴파일되는지.
-      2026-11-17 : `pulsetest_interrupt_1112` 실측 — CHANGE 수 ÷ 2 가 오실로스코프 주파수와 평균 0.45 Hz 차(5 ~ 226 Hz).
+      2026-11-17 : `pulsetest_interrupt_1112` 실측 — CHANGE 수 ÷ 2 가 오실로스코프 주파수와 평균 0.45 Hz 차(5 ~ 226 Hz). `pulse_test_1118` · `pulsetest_quad_1118` 은 컴파일만 했다
+      (quad 는 PC 에서 가짜 에지로 계산만 확인 — ±90 · 60 · 180°, 재출발 · 채터링 버림, micros 넘침).
+      `dualtest_1118` 도 컴파일 · PC 모의(입력 해석 · 제한 · 출력 형식)만 했다.
+- [ ] `tool/joy.ino` · `tool/joy.py` (2026-11-18) : 메가 컴파일 + PC 모의(가짜 포트 · 가짜 LCD)만 했다. 실제 메가 · LCD · 우노로 함께 돌려 볼 것.
+      dualtest 에는 명령 시한이 없다 — joy.py 가 죽으면 우노는 마지막 명령대로 계속 간다 (broon_1119 는 2 초 시한이 있다).
+- [ ] `tool/arduino_code/broon_1119.ino` (2026-11-19) : 컴파일 + PC 모의(전방 · 후방 PWM · DIR 늘 같음, 시한 2.000 s 에 곧바로 0, 조향 유지, 버린 줄 · 's')만 했다.
+      후방 모터가 실제로 전방과 같은 쪽으로 도는지(아니면 후방 모터 선을 바꾼다), 시한 정지(PWM 0 = 제동)의 실차 충격.
 - [ ] 조향 가변저항 상 · 하한(A3 의 −460 ~ 423 = ADC 52 ~ 935)이 지금 차에서 맞는지 — Vr.1 코드값이다. 끝까지 꺾어 ADC 를 실측한다.
       2026-11-16 : 좌 끝 = ADC **954** 실측(큰 값 쪽이 좌). **우 끝은 아직** — 재면 `steer_test_1116.ino` 의 `POT_RIGHT_ADC` 를 고친다.
 - [ ] `ros2 run broon gps_setting` 을 실제 수신기 두 대로(칩 ID 읽기 · 끌어다 놓기).
@@ -162,12 +237,42 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - 2026-11-11 : 잡다한 파일은 `tool/` 로. white1(단일) · white2(듀얼) · broon(하드웨어) 패키지. 1번 GPS = 전방, 2번 = 후방.
   출발은 Fixed 에서만, 주행은 Float 여도 계속. white2 는 Fixed 에서만 헤딩을 잡는다. 안테나 간격 1.0 m. 속도 km/h(최대 16) · 조향 도(최대 25).
 - 2026-11-11 : 리포 `main` 브랜치 신설, 레거시 `white/` 는 그대로 둔다, 이 문서(AGENTS.md)를 정본으로.
+- 2026-11-19 : **broon = 하드웨어(아두이노 · GPS · 구동 · 조이스틱 · 기록), white1 = 자율주행 알고리즘. 차를 움직이는 것은 broon 만으로.**
+  `/cmd_vel` = Int32MultiArray [펄스 −92 ~ 92, 조향 −21 ~ 21] 정수(범위 밖 · 다른 꼴은 arduino 가 버린다), `/enc_pot` = 우노 출력 4값.
+  보드 판별은 `J,` = 조이스틱 · 나머지 = 구동, arduino 가 하고 joy 는 넘겨받는다. 조이스틱 값이 그대로여도 주기적으로 낸다.
+  SWA ON = 조이스틱 신호를 보낸다 · OFF = 무시. 자율주행 정지는 SWA 가 ON 으로 바뀌는 순간에만(`/joy318`).
+  record : 수동(`ros2 run broon record` · broon.launch — `rec_<연도월일>_<시분초>.csv`, 아무 키 · Ctrl+C 로 끝) · 자율(driving 과 함께 —
+  `route_<매핑>_<연도월일>_<시분초>.csv`, 수동 기록이 돌고 있어도 따로 남긴다, `/joy318` 도 적는다). GPS 없으면 GPS 칸은 빈다. 듀얼이면 두 궤적.
+  driving : 펄스 0 ~ 92 만(후진 없음), 조향 −21 ~ 21(− 좌), 펄스 환산은 추정값으로 시작, 조향 보정은 중립.
+  mapping : GPS 궤적만(헤딩 없음), dir = 펄스 부호, `map_<일련번호>.csv`. 런치 이름 `one.launch.py`(joy 포함). white2 는 나중에.
+  궤적 사이트 : `/fix` 기준, 듀얼 기록만 '듀얼 GPS 궤적 비교' 단추(기본 꺼짐), gold(조향 ±40 · 펄스 15)와 hl(±21 · ±92) 둘 다 — xeon 세션이 고치고 배포.
+- 2026-11-19 : **원격 E-STOP** — broon/estop 이 domichat 방 `domi_fishing_broon`(제한방)을 구독, `STOP` · `GO` · `STATUS` 에 답하고 `/estop`(1 발동 · 0 해제)을 낸다.
+  arduino 는 PWM 0 · 조향 0, driving 은 자율주행 종료, record 는 세 방식 모두 기록. 계정 비밀번호는 코드에 넣어도 된다(별도 파일 금지).
+  웹 `domiman.duckdns.org/estop`(비밀번호 1234, 상태 문구 3종 · 큰 빨강/초록 버튼, 동시 접속) — xeon 세션 담당.
 
 ## A7. 관련 저장소 · 세션
 
 - `cheongbaek/gold` — 금색차 자율주행 스택(`white1` · `white2` · `nxde` · `record.py` 의 원형).
+  - **이 노트북의 `~/gold_ws`** (2026-11-18) = 그 리포의 `gold_ws/` 를 표준 워크스페이스로 옮긴 것. `src/` 에 white1 · nxde · lidar ·
+    mppi_local_planner(main `10b28b7` **그대로**, git 연결 없음 · white2 · white3 · white1_0929 는 뺐다) + ouster-ros **0.13.13**(업스트림 clone).
+    GPS·IMU 만 쓴다 — 카메라는 코드를 고치지 않고 `use_camera:=false` 로 끈다(사용자 지정).
+    **라이다도 안 쓰기로 했다**(같은 날 사용자 지시) → 원본에서 **유일하게 고친 곳 = 주행 출발 조건의 라이다 게이트**:
+    `white1/prompt.py` ③라이다 대기 제거(주행 2단 ①스위치 → ②E-STOP) · `driving.py` `require_lidar` 기본 False ·
+    `one_launch.py` 가 `require_lidar` 를 안 넘김. 원본 사본은 없으니 되돌릴 땐 gold 리포 `10b28b7` 에서 가져온다.
+    같은 날 추가 수정(사용자 지시) : ① **자율 출력 최대 2펄스** — driving 새 파라미터 `auto_pulse_max`(런치 인자, 기본 2)가
+    `send()` 마지막(저속 보정 +2 · 킥 · X 구간 포함)을 자르고 drive/heading/y/x 펄스도 그 값으로 자른다. 런치 기본값
+    drive 7→2 · heading 3→2 · y 3→2 · x 12→2 · x_launch 15→2. 조이스틱 `joy_pulse_max`(15)는 그대로(사용자 선택).
+    ② **첫 출발만 RTK Fixed** — `_rtk_hold` 가 `_rtk_departed` 를 기억해 출발 뒤엔 Float 도 계속 간다. DGPS 이하·두절이면
+    종전대로 0.4 s 뒤 서고 Fixed 2 s 에 재개(사용자 선택). 단위 시험 + 가짜 GPS 품질 전환 스택 시험만 했다.
+    ⚠️ CSV terrain 'L' 구간은 그대로다 — 라이다 없이 닿으면 driving 이 그 자리에서 주행을 끝낸다(maincourse.csv 에 L 44 WP).
+    빌드 `cd ~/gold_ws && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release` (lidar README 대로 symlink 금지).
+    ⚠️ hl_ws 에도 `white1` 이 있다 — **두 워크스페이스를 한 셸에서 같이 source 하지 않는다.**
+    빌드 · 가짜 GPS/IMU 연기 시험만 했다(장치 연결 안 함) → 실차 · 실센서 미검증.
 - `cheongbaek/black_ws22` — T870 으로 실주행 튜닝한 `driving.py` v6.7.3 의 출처.
 - `cheongbaek/find_wc` — 서버(xeon PC `C:\web`) 백업. 궤적 사이트 소스는 `apps/gps`. 노트북에서 직접 못 읽으므로 Remote Control 세션 `xeon` 에 물어본다.
+  ★세션 이름이 바뀔 수 있다★ — 2026-11-19 에는 `yskim-purring-squirrel` 이 xeon PC 세션이었다. ListAgents 의 Remote Control 세션에 어느 PC 인지 물어 확인한다.
+- `cheongbaek/domiman` (공개) — domichat 서버 `domiserver.py` · 클라이언트 `domichat.py` 의 백업(늦을 수 있다, 실서버는 xeon PC).
+  프레임 `[길이4][종류1][JSON]`, 낚시방 `domi_fishing_<id>` · 비밀번호 `FISHING_ROOM_PW`. broon/estop · gold nxde/tts 가 이 규격을 쓴다.
 
 ---
 

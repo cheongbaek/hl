@@ -1,289 +1,263 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-arduino.py ― 아두이노(UNO R4 Minima) 브리지 — 새 바이너리 규약 ★가작성★ (2026-11-11)
+arduino.py ― 아두이노 판별 · 구동 '우노' 브리지 [broon]  (2026-11-19 다시 씀)
 ════════════════════════════════════════════════════════════════════════════════
-    ros2 run broon arduino          (white1 · white2 의 one_launch.py 가 띄운다)
+    ros2 run broon arduino          (broon.launch.py · white1 one.launch.py 가 띄운다)
 
-  구독  /cmd_vel_raw (Twist)     linear.x = 목표 속도 ★km/h★, angular.z = 조향각 ★도★ (+ 좌 / − 우)
-        /control_state (Bool)    True = 자율주행이 차를 쥔다. False 면 속도 0 · 조향 0 을 보낸다
-  발행  /arduino_status (String) 1 Hz 한 줄 상태
+아두이노 포트를 판별하고, 구동계(UNO R4 Minima — tool/arduino_code/broon_1119.ino)와 문자열로 주고받는다.
+규약 · 판별의 정본은 boards.py 머리말이다.
 
-⚠️ 아두이노 쪽 펌웨어가 아직 없다 — 아래 규약은 사용자가 정한 틀(시작바이트 · 속도 · 조향 · 체크섬)에
-   PC 쪽에서 ★임시로★ 값을 채운 것이다. 펌웨어가 나오면 '규약' 절의 상수 · 함수만 맞추면 된다.
-   실제 보드로 검증한 적이 없다. 옛 Mega 용 문자열 규약(C,vel,steer)은 white/arduino.py 에 있다.
+판별 — ★보드 종류와 상관없이★ "J," 줄을 보내는 아두이노 = 조이스틱, ★나머지 아두이노 = 구동계★ (tool/joy.py 와 같다)
+  · 조이스틱 포트는 열어서 확인만 하고 ★닫는다★ — /joy_port (래치)로 알리면 joy 노드가 연다.
+    (메가는 포트를 열 때마다 리셋된다 — 여기서 한 번, joy 가 열 때 한 번. joy 는 "J,RESET" 을 받고 영점을 다시 잡는다)
+  · 구동 포트는 계속 쥐고 있다. 빠지면 다시 찾는다.
+  · 처음에 못 찾은 보드는 RESCAN_S 마다 ★새로 나타난 포트만★ 열어 본다 — 이미 조이스틱으로 판별한 포트는
+    다시 열지 않는다(joy 가 쓰는 중에 열면 메가가 리셋된다). 포트가 목록에서 사라졌다 다시 생기면 새 포트로 본다.
+  · 포트를 직접 정하려면 -p drive_port:=/dev/ttyACM0 (그러면 그 포트를 판별 없이 구동으로 쓴다) ·
+    -p joy_port:=/dev/ttyACM1 (판별 없이 /joy_port 로 알린다).
 
-════════════════════════════════════════════════════════════════════════════════
- 규약 — PC → 아두이노, 한 프레임 4바이트
-════════════════════════════════════════════════════════════════════════════════
-    [0] 시작바이트  0xAA
-    [1] 속도   int8  km/h   −16 … +16   (음수 = 후진. white1 · white2 는 후진 명령을 내지 않는다)
-    [2] 조향   int8  도     −25 … +25   (+ 좌 / − 우 — steer_sign:=-1.0 으로 뒤집는다)
-    [3] 체크섬 uint8        ([1] + [2]) 를 256 으로 나눈 나머지 (바이트 값 그대로 더한다)
+토픽
+  구독  /cmd_vel  (std_msgs/Int32MultiArray)  data = [목표 펄스, 목표 조향각] 두 정수
+                  펄스 −92 ~ 92 (부호 = 방향), 조향 −21 ~ 21 (− 좌 · + 우). ★길이 · 범위가 틀린 메시지는 버린다★.
+                  받는 즉시 우노로 "<펄스> <조향>\\n" 한 줄을 보낸다 — ★스스로 되풀이해 보내지 않는다★.
+                  그래서 /cmd_vel 을 내는 노드(joy · driving)가 죽으면 우노의 명령 시한(2 초)이 구동을 세운다.
+  발행  /enc_pot  (std_msgs/Float64MultiArray) data = [받은 펄스, 받은 조향각, 실측 펄스, 실측 조향각]
+                  우노가 50 ms 마다 내는 네 숫자 그대로 — 앞 둘 = 우노가 '받았다고' 되돌려 준 명령(자르기 뒤),
+                  뒤 둘 = 엔코더 실측 펄스(최근 100 ms A+B 에지 수, 부호 = 지금 DIR) · 가변저항 실측 조향각 [도]
+        /joy_port (std_msgs/String, 래치)        조이스틱 포트 경로 ('' = 아직 없음)
+        /arduino_status (std_msgs/String)       1 Hz 한 줄 상태 (prompt 가 띄운다)
+  구독  /estop    (std_msgs/Int32, 래치)       ★1 = E-STOP★ — 곧바로 우노에 's'(구동 · 조향 PWM 즉시 0) 뒤 '0 0'(조향 0° 로)을
+                  보내고, 0 이 올 때까지 /cmd_vel 을 ★막고★ '0 0' 을 ESTOP_RESEND_S 마다 보낸다. 0 이면 다시 /cmd_vel 을 넘긴다
+                  (해제했다고 스스로 움직이지는 않는다 — 다음 /cmd_vel 부터 따른다). (2026-11-19 사용자 지정, broon/estop.py)
 
-  · 사용자 지정은 속도 · 조향 각각 int16 이었고 "더 줄일 수 있으면 줄인다" 였다 — 범위가 ±16 · ±25 라
-    ★int8(1바이트)★ 로 충분하다. 프레임이 6바이트 → 4바이트.
-  · 시작바이트 0xAA 는 유효한 속도(0x00~0x10, 0xF0~0xFF) · 조향(0x00~0x19, 0xE7~0xFF) · 체크섬 값과 겹치지
-    않는다 — 받는 쪽이 0xAA 를 만나면 언제나 프레임 처음이다(중간부터 읽어도 바로 맞춘다).
-  · 아두이노 → PC 는 정해진 것이 없다. 오는 바이트는 세기만 하고 처음 몇 개를 로그에 남긴다.
-    ★바퀴 속도 피드백이 없으므로 white1 · white2 는 속도를 GPS 로만 본다.★
-
-  받는 쪽(아두이노) 참고 — 4바이트를 모아 검사한다:
-      if (Serial.available() >= 4 && Serial.read() == 0xAA) {
-        int8_t speed = Serial.read(), steer = Serial.read();  uint8_t chk = Serial.read();
-        if ((uint8_t)((uint8_t)speed + (uint8_t)steer) == chk) { /* 적용, 마지막 수신 시각 갱신 */ }
-      }
-
- 보내는 때 — ★주기가 없다★
-  · 값(정수 km/h · 정수 도)이 ★바뀌면 곧바로★ 보낸다. driving 이 20 Hz 로 내므로 많아야 초당 20프레임.
-  · 값이 그대로여도 ★1초에 한 번★ 은 같은 값을 다시 보낸다(HEARTBEAT_S) — 아두이노가 PC 생존을 알 수 있게.
-    아두이노에는 3초 동안 아무것도 안 오면 정지하는 안전 코드가 들어갈 예정이다.
-  · 자율주행이 아닐 때(/control_state False)는 0 · 0 을 그 주기로 보낸다. 리모컨 등으로 손수 몰 때 PC 의
-    0 · 0 이 방해된다면 idle_heartbeat:=false — 0 · 0 을 몇 번 보낸 뒤 조용히 있는다(그러면 3초 뒤
-    아두이노 안전 정지가 걸린다는 뜻이기도 하다 — 펌웨어가 나오면 다시 정할 것).
-  · 자율주행 중 /cmd_vel_raw 가 CMD_TIMEOUT_S 넘게 끊기면 속도 0 을 보낸다. 내려갈 때도 0 · 0 을 보낸다.
-
- 반올림 — 속도는 정수 km/h 로 반올림한다. 0 보다 큰 명령이 0 으로 깎이면 1 km/h 로 올린다
-  (driving 의 '아주 느리게' 가 '정지' 로 바뀌지 않게 — white/arduino.py 의 최소 1틱과 같은 처리).
-
- 포트 — USB VID 로 찾는다(ARDUINO_VIDS). UNO R4 Minima = 2341:0069. 여럿이면 R4 Minima 를 먼저 고른다.
-  R4 Minima 는 USB 직결(CDC)이라 baud 값은 의미가 없고, Mega 와 달리 포트를 열어도 리셋되지 않는다.
+끝낼 때 우노에 "0 0" 을 한 번 보낸다(구동은 하강 제한을 따라 서고 조향은 0° 로).
+⚠️ 실제 보드 두 대로 함께 돌려 본 적은 아직 없다 — 가짜 시리얼 포트로만 확인했다.
 """
 
 import signal
-import struct
 import threading
 import time
 
 import rclpy
 import rclpy.executors
-from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import Float64MultiArray, Int32, Int32MultiArray, String
 
 import serial
-import serial.tools.list_ports
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  규약 ★펌웨어가 나오면 여기만 맞춘다★
-# ══════════════════════════════════════════════════════════════════════════════
-START_BYTE = 0xAA
-FRAME_LEN = 4
-MAX_SPEED_KMH = 16
-MAX_STEER_DEG = 25
+from broon import boards
+from broon.boards import CMD_TOPIC, ENC_POT_TOPIC, ESTOP_TOPIC, JOY_PORT_TOPIC
 
-
-def checksum(speed_byte, steer_byte):
-    """데이터 두 바이트(0~255 값)의 합을 256 으로 나눈 나머지."""
-    return (speed_byte + steer_byte) & 0xFF
-
-
-def pack_frame(speed_kmh, steer_deg):
-    """정수 속도 · 조향 → 4바이트 프레임. 범위를 넘으면 잘라 넣는다."""
-    speed = max(-MAX_SPEED_KMH, min(MAX_SPEED_KMH, int(speed_kmh)))
-    steer = max(-MAX_STEER_DEG, min(MAX_STEER_DEG, int(steer_deg)))
-    body = struct.pack('<bb', speed, steer)
-    return bytes([START_BYTE]) + body + bytes([checksum(body[0], body[1])])
-
-
-def unpack_frame(frame):
-    """4바이트 프레임 → (속도, 조향). 시작바이트 · 체크섬이 틀리면 None (시험 · 펌웨어 대조용)."""
-    if len(frame) != FRAME_LEN or frame[0] != START_BYTE or checksum(frame[1], frame[2]) != frame[3]:
-        return None
-    return struct.unpack('<bb', frame[1:3])
-
-
-def to_int_speed(v_kmh):
-    """목표 속도 [km/h] → 정수. 0 보다 큰(작은) 명령은 최소 ±1 로."""
-    n = int(round(v_kmh))
-    if n == 0 and v_kmh > 0.05:
-        n = 1
-    elif n == 0 and v_kmh < -0.05:
-        n = -1
-    return max(-MAX_SPEED_KMH, min(MAX_SPEED_KMH, n))
-
-
-# ── 포트 ──
-ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}    # Arduino SA · 호환(arduino.org) · CH340
-R4_MINIMA = (0x2341, 0x0069)
-BAUD = 115200                # R4 Minima(USB CDC)에서는 의미 없음
-
-# ── 송신 ──
-HEARTBEAT_S = 1.0            # 값이 그대로여도 이 간격으로 다시 보낸다
-CMD_TIMEOUT_S = 0.5          # 자율주행 중 /cmd_vel_raw 가 이만큼 끊기면 속도 0
-IDLE_STOP_N = 3              # idle_heartbeat:=false 일 때, 손을 떼면서 0 · 0 을 이만큼 보내고 조용히 한다
-CHECK_PERIOD_S = 0.05        # 하트비트 · 시한을 살피는 주기
-RX_LOG_N = 5                 # 연결마다 아두이노에서 온 바이트를 이만큼까지 로그에 남긴다
-
-
-def find_port(exclude=()):
-    """아두이노 포트 경로. R4 Minima 를 먼저, 없으면 ARDUINO_VIDS 중 번호가 작은 것. 없으면 ''."""
-    hits = []
-    for p in serial.tools.list_ports.comports():
-        if p.vid in ARDUINO_VIDS and p.device not in exclude:
-            hits.append((0 if (p.vid, p.pid) == R4_MINIMA else 1, p.device))
-    hits.sort()
-    return hits[0][1] if hits else ""
+RESCAN_S = 3.0               # 못 찾은 보드가 있으면 이 간격으로 새 포트를 열어 본다
+STATUS_S = 1.0
+DRIVE_STALE_S = 0.5          # 우노 출력이 이만큼 없으면 상태에 '응답 없음'
+ESTOP_RESEND_S = 0.5         # E-STOP 동안 '0 0' 을 다시 보내는 간격
 
 
 class ArduinoNode(Node):
     def __init__(self):
-        super().__init__('arduino_node')
-        self.declare_parameter('port', '')              # 비우면 VID 로 찾는다
-        self.declare_parameter('baud', BAUD)
-        self.declare_parameter('steer_sign', 1.0)       # −1.0 = 조향 부호 뒤집기 (펌웨어가 + 우 일 때)
-        self.declare_parameter('idle_heartbeat', True)  # 자율주행이 아닐 때도 0 · 0 을 1초마다 보낸다
-        self.port_param = str(self.get_parameter('port').value)
-        self.baud = int(self.get_parameter('baud').value)
-        self.steer_sign = -1.0 if float(self.get_parameter('steer_sign').value) < 0 else 1.0
-        self.idle_heartbeat = bool(self.get_parameter('idle_heartbeat').value)
+        super().__init__('arduino')
+        self.declare_parameter('drive_port', '')     # 비우면 판별
+        self.declare_parameter('joy_port', '')       # 비우면 판별
+        self.fixed_drive = str(self.get_parameter('drive_port').value)
+        self.fixed_joy = str(self.get_parameter('joy_port').value)
 
-        self.ser = None
-        self.ser_lock = threading.Lock()
-        self.port = ''
         self.stop_evt = threading.Event()
+        self.ser = None              # 구동 포트
+        self.ser_lock = threading.Lock()
+        self.drive_dev = ''
+        self.joy_dev = ''
+        self.probed = set()          # 이미 열어 본 포트 (목록에서 사라지면 지운다)
 
-        self.enabled = False
-        self.cmd_kmh = 0.0
-        self.cmd_steer = 0.0
-        self.cmd_t = 0.0
-        self.sent = None             # 마지막으로 보낸 (속도, 조향)
-        self.sent_t = 0.0
-        self.idle_left = 0
+        self.rx_n = 0                # 우노에서 받은 올바른 줄
+        self.rx_t = 0.0
+        self.last_fb = None
         self.tx_n = 0
-        self.rx_n = 0
-        self.rx_logged = 0
+        self.drop_n = 0              # 범위 · 길이가 틀려 버린 /cmd_vel
+        self.nodrive_n = 0           # 구동 포트가 없어 못 보낸 /cmd_vel
+        self.last_cmd = None
+        self.last_cmd_t = 0.0
+        self.estop = False           # /estop 1 — /cmd_vel 을 막는다
+        self.estop_n = 0             # E-STOP 으로 막은 /cmd_vel
 
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.pub_enc = self.create_publisher(Float64MultiArray, ENC_POT_TOPIC, 20)
+        self.pub_joy = self.create_publisher(String, JOY_PORT_TOPIC, latched)
         self.pub_status = self.create_publisher(String, '/arduino_status', 10)
-        self.create_subscription(Twist, '/cmd_vel_raw', self.cb_cmd, 10)
-        self.create_subscription(Bool, '/control_state', self.cb_state, 10)
-        self.create_timer(CHECK_PERIOD_S, self.flush)
-        self.create_timer(1.0, self.publish_status)
-        threading.Thread(target=self.port_worker, daemon=True).start()
+        self.create_subscription(Int32MultiArray, CMD_TOPIC, self.cb_cmd, 50)
+        self.create_subscription(Int32, ESTOP_TOPIC, self.cb_estop, latched)
+        self.create_timer(ESTOP_RESEND_S, self.estop_tick)
+        self.create_timer(STATUS_S, self.publish_status)
+        self.pub_joy.publish(String(data=''))
+        if self.fixed_joy:
+            self._set_joy(self.fixed_joy)
+        threading.Thread(target=self.worker, daemon=True).start()
         self.get_logger().info(
-            f"아두이노 브리지(가작성 규약: 0x{START_BYTE:02X} · 속도 int8 km/h ±{MAX_SPEED_KMH} · 조향 int8 도 "
-            f"±{MAX_STEER_DEG} · 체크섬) — 바뀌면 즉시 + {HEARTBEAT_S:.0f}초마다 재송신, "
-            f"조향 부호 {'+ 좌' if self.steer_sign > 0 else '+ 우(뒤집음)'}, "
-            f"대기 중 {'0·0 계속 송신' if self.idle_heartbeat else '송신 안 함'}")
+            f"아두이노 — 구동 {self.fixed_drive or '판별'} · 조이스틱 {self.fixed_joy or '판별'} "
+            f"('J,' 줄 = 조이스틱, 나머지 = 구동). {CMD_TOPIC} [펄스 ±{boards.PULSE_MAX}, 조향 ±{boards.STEER_MAX}] → 우노, "
+            f"우노 출력 → {ENC_POT_TOPIC}")
 
-    # ── ROS 콜백 ─────────────────────────────────────────────────────────────
-    def cb_cmd(self, msg: Twist):
-        self.cmd_kmh = float(msg.linear.x)
-        self.cmd_steer = float(msg.angular.z)
-        self.cmd_t = time.time()
-        self.flush()                 # 값이 바뀌었으면 곧바로 나간다
-
-    def cb_state(self, msg: Bool):
-        on = bool(msg.data)
-        if on == self.enabled:
+    # ── /cmd_vel → 우노 ──────────────────────────────────────────────────────
+    def cb_cmd(self, msg: Int32MultiArray):
+        cmd = boards.valid_cmd(msg.data)
+        if cmd is None:
+            self.drop_n += 1
+            self.get_logger().warning(f"{CMD_TOPIC} 버림 {list(msg.data)} — [펄스 ±{boards.PULSE_MAX}, "
+                                      f"조향 ±{boards.STEER_MAX}] 두 정수만 받는다", throttle_duration_sec=2.0)
             return
-        self.enabled = on
-        if not on:
-            self.idle_left = IDLE_STOP_N
-        self.get_logger().info(f"제어권 {'자율주행' if on else '해제 — 0 · 0 송신'}")
-        self.flush()
+        if self.estop:
+            self.estop_n += 1
+            return                            # E-STOP 중 — 넘기지 않는다
+        self.last_cmd, self.last_cmd_t = cmd, time.time()
+        self.write_line(f"{cmd[0]} {cmd[1]}\n")
 
-    # ── 송신 ─────────────────────────────────────────────────────────────────
-    def target(self, now):
-        """지금 보내야 할 (속도, 조향) 정수 쌍. 보낼 것이 없으면 None."""
-        if not self.enabled:
-            if self.idle_heartbeat or self.idle_left > 0:
-                return (0, 0)
-            return None
-        v = self.cmd_kmh
-        if now - self.cmd_t > CMD_TIMEOUT_S:
-            v = 0.0
-            if self.cmd_t > 0.0:
-                self.get_logger().warning(f"/cmd_vel_raw {now - self.cmd_t:.1f}s 끊김 — 속도 0 송신",
-                                          throttle_duration_sec=2.0)
-        steer = int(round(self.cmd_steer * self.steer_sign))
-        return (to_int_speed(v), max(-MAX_STEER_DEG, min(MAX_STEER_DEG, steer)))
+    # ── E-STOP ───────────────────────────────────────────────────────────────
+    def cb_estop(self, msg: Int32):
+        on = int(msg.data) == 1
+        if on == self.estop:
+            return
+        self.estop = on
+        if on:
+            self.write_line("s\n")            # 구동 · 조향 PWM 즉시 0 (하강 제한 없이)
+            self.write_line("0 0\n")          # 목표 펄스 0 · 조향 0° (조향 PID 를 다시 켠다)
+            self.get_logger().warning("🛑 E-STOP — 우노에 's' · '0 0', 해제될 때까지 /cmd_vel 을 막는다")
+        else:
+            self.get_logger().info("✅ E-STOP 해제 — 다음 /cmd_vel 부터 넘긴다")
 
-    def flush(self):
-        """값이 바뀌었거나 HEARTBEAT_S 가 지났으면 한 프레임 보낸다."""
-        now = time.time()
-        want = self.target(now)
-        if want is None:
-            return
-        if want == self.sent and now - self.sent_t < HEARTBEAT_S:
-            return
+    def estop_tick(self):
+        if self.estop:
+            self.write_line("0 0\n")
+
+    def write_line(self, text):
         with self.ser_lock:
             if self.ser is None:
-                return
+                self.nodrive_n += 1
+                return False
             try:
-                self.ser.write(pack_frame(*want))
+                self.ser.write(text.encode('ascii'))
+            except serial.SerialTimeoutException:
+                return False                  # 이번 것은 건너뛴다 — 다음 명령이 곧 온다
             except (serial.SerialException, OSError) as e:
-                self.get_logger().warning(f"시리얼 송신 오류: {e}", throttle_duration_sec=2.0)
-                return
-        self.sent, self.sent_t = want, now
+                self.get_logger().warning(f"우노 송신 오류: {e}", throttle_duration_sec=2.0)
+                return False
         self.tx_n += 1
-        if not self.enabled and self.idle_left > 0:
-            self.idle_left -= 1
-            self.sent_t = now - HEARTBEAT_S + CHECK_PERIOD_S     # 손 떼는 0 · 0 은 연달아 보낸다
+        return True
 
-    # ── 포트 (스레드) — 찾기 → 열기 → 읽기, 빠지면 다시 찾는다 ───────────────
-    def port_worker(self):
+    # ── 판별 · 수신 (스레드) ──────────────────────────────────────────────────
+    def _set_joy(self, dev):
+        if dev != self.joy_dev:
+            self.joy_dev = dev
+            self.pub_joy.publish(String(data=dev))
+            self.get_logger().info(f"🎮 조이스틱 = {dev or '없음'}")
+
+    def _forget_gone(self):
+        """목록에서 사라진 포트는 다음에 다시 열어 본다 (다시 꽂으면 새 장치다)."""
+        present = {d for d, *_ in boards.candidate_ports()}
+        self.probed &= present
+        if self.joy_dev and self.joy_dev not in present and not self.fixed_joy:
+            self.get_logger().warning(f"조이스틱 포트 {self.joy_dev} 가 사라졌다 — 다시 찾는다")
+            self._set_joy('')
+        return present
+
+    def worker(self):
+        """구동 · 조이스틱 중 못 찾은 것이 있으면 RESCAN_S 마다 새 포트를 열어 본다. 구동 수신은 따로 도는 스레드."""
+        next_scan = 0.0
         while not self.stop_evt.is_set():
-            dev = self.port_param or find_port()
-            if not dev:
-                self.port = ''
-                self.get_logger().warning("아두이노 포트를 찾는 중 (VID 2341/2a03/1a86)", throttle_duration_sec=10.0)
-                self.stop_evt.wait(1.0)
-                continue
+            need = self.ser is None or not self.joy_dev
+            now = time.monotonic()
+            if need and now >= next_scan:
+                next_scan = now + RESCAN_S
+                self._scan()
+            self.stop_evt.wait(0.2)
+
+    def _scan(self):
+        present = self._forget_gone()
+        if self.ser is None and self.fixed_drive:
             try:
-                ser = serial.Serial(dev, self.baud, timeout=0.1, exclusive=True)
+                ser = serial.Serial(self.fixed_drive, boards.BAUD, timeout=0.1,
+                                    write_timeout=boards.WRITE_TIMEOUT_S, exclusive=True)
             except (serial.SerialException, OSError) as e:
-                self.get_logger().warning(f"아두이노 포트 열기 실패 {dev}: {e}", throttle_duration_sec=10.0)
-                self.stop_evt.wait(2.0)
-                continue
-            self.port = dev
-            self.sent, self.rx_n, self.rx_logged = None, 0, 0
-            self.get_logger().info(f"아두이노 연결 {dev}")
+                self.get_logger().warning(f"구동 포트 열기 실패 {self.fixed_drive}: {e}", throttle_duration_sec=10.0)
+            else:
+                self._attach(self.fixed_drive, ser)
+        skip = {self.joy_dev, self.drive_dev, self.fixed_joy, self.fixed_drive} - {''}
+        fresh = [d for d in sorted(present) if d not in self.probed and d not in skip]
+        if not fresh:
+            if self.ser is None:
+                self.get_logger().warning("구동 아두이노를 찾는 중 — 새 아두이노 포트가 없다", throttle_duration_sec=15.0)
+            return
+        want_drive = self.ser is None
+        self.get_logger().info(f"아두이노 판별 {fresh} — 최대 {boards.DETECT_WINDOW_S:.1f}s")
+        res = boards.probe(fresh, keep_drive=want_drive, stop=self.stop_evt)
+        self.probed |= set(fresh) - set(res['busy'])     # 열지 못한 포트는 다음에 다시
+        for dev, why in res['busy'].items():
+            self.get_logger().warning(f"{dev} 열기 실패(사용 중?): {why}", throttle_duration_sec=10.0)
+        if res['joy'] and not self.fixed_joy and not self.joy_dev:
+            self._set_joy(res['joy'])
+        extra = res['extra'] + ([] if want_drive or not res['drive'] else [res['drive']])
+        for dev in extra:
+            self.get_logger().warning(f"구동 후보가 하나 더 있다 {dev} — 쓰지 않는다")
+        if res['drive_ser'] is not None:
+            self._attach(res['drive'], res['drive_ser'])
+
+    def _attach(self, dev, ser):
+        self.drive_dev = dev
+        self.rx_n = 0
+        with self.ser_lock:
+            self.ser = ser
+        self.get_logger().info(f"🚗 구동 우노 연결 {dev}")
+        threading.Thread(target=self._read_drive, args=(ser,), daemon=True).start()
+
+    def _read_drive(self, ser):
+        buf = b""
+        try:
+            while not self.stop_evt.is_set():
+                data = ser.read(ser.in_waiting or 1)
+                if not data:
+                    continue
+                buf += data
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    fb = boards.parse_drive_line(raw.decode('ascii', errors='ignore').strip())
+                    if fb is None:
+                        continue
+                    self.rx_n += 1
+                    self.rx_t = time.time()
+                    self.last_fb = fb
+                    self.pub_enc.publish(Float64MultiArray(data=[float(v) for v in fb]))
+        except (serial.SerialException, OSError) as e:
+            self.get_logger().error(f"구동 우노 단절 {self.drive_dev}: {e} — 다시 찾는다")
+        finally:
             with self.ser_lock:
-                self.ser = ser
-            try:
-                while not self.stop_evt.is_set():
-                    data = ser.read(64)
-                    if data:
-                        self._on_rx(data)
-            except (serial.SerialException, OSError) as e:
-                self.get_logger().error(f"아두이노 단절: {e} — 다시 찾는다")
-            finally:
-                with self.ser_lock:
-                    self.ser = None
-                try:
-                    ser.close()
-                except (serial.SerialException, OSError):
-                    pass
-            self.stop_evt.wait(1.0)
+                self.ser = None
+            boards.close_quietly(ser)
+            self.probed.discard(self.drive_dev)
+            self.drive_dev = ''
 
-    def _on_rx(self, data):
-        """아두이노 → PC 는 규약이 없다 — 세기만 하고 처음 몇 번만 보여 준다."""
-        self.rx_n += len(data)
-        if self.rx_logged < RX_LOG_N:
-            self.rx_logged += 1
-            self.get_logger().info(f"아두이노에서 {len(data)}바이트: {data[:24].hex(' ')} {data[:24]!r}")
-
+    # ── 상태 ─────────────────────────────────────────────────────────────────
     def publish_status(self):
         now = time.time()
         if self.ser is None:
-            s = f"아두이노 미연결 ({self.port_param or '자동 탐색'})"
+            drv = "구동 미연결"
+        elif self.rx_n == 0 or now - self.rx_t > DRIVE_STALE_S:
+            drv = f"구동 {self.drive_dev} (응답 없음)"
         else:
-            own = "자율" if self.enabled else "대기"
-            last = f"{self.sent[0]}km/h {self.sent[1]}° ({now - self.sent_t:.1f}s 전)" if self.sent else "보낸 것 없음"
-            s = f"아두이노 {self.port} | {own} | 마지막 송신 {last} | 송신 {self.tx_n}프레임 · 수신 {self.rx_n}바이트"
+            r, a, m, ma = self.last_fb
+            drv = f"구동 {self.drive_dev} 받은 {r:+d} {a:+d}° · 실측 {m:+d} {ma:+.1f}°"
+        cmd = (f"마지막 명령 {self.last_cmd[0]:+d} {self.last_cmd[1]:+d}° ({now - self.last_cmd_t:.1f}s 전)"
+               if self.last_cmd else "명령 없음")
+        s = (("🛑 E-STOP 중 | " if self.estop else "")
+             + f"아두이노 | {drv} | 조이스틱 {self.joy_dev or '없음'} | {cmd} | 송신 {self.tx_n}"
+             + (f" · 버림 {self.drop_n}" if self.drop_n else "")
+             + (f" · 구동 없어 못 보냄 {self.nodrive_n}" if self.nodrive_n else "")
+             + (f" · E-STOP 으로 막음 {self.estop_n}" if self.estop_n else ""))
         self.pub_status.publish(String(data=s))
 
     def shutdown(self):
         self.stop_evt.set()
-        with self.ser_lock:
-            if self.ser is not None:
-                try:
-                    for _ in range(3):
-                        self.ser.write(pack_frame(0, 0))
-                    self.ser.flush()
-                except (serial.SerialException, OSError):
-                    pass
+        self.write_line("0 0\n")
 
 
 def main(args=None):

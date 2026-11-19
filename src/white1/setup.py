@@ -12,7 +12,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,11 +22,10 @@ setup(
     license='Proprietary',
     entry_points={
         'console_scripts': [
-            # GPS · 아두이노 노드는 broon 패키지에 있다 — one_launch.py 가 package='broon' 으로 띄운다
+            # GPS · 아두이노 · 조이스틱 · 기록 노드는 broon 패키지에 있다 — one.launch.py 가 package='broon' 으로 띄운다
             'driving = white1.driving:main',
             'mapping = white1.mapping:main',
             'prompt  = white1.prompt:main',
-            'record  = white1.record:main',
         ],
     },
 )

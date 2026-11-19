@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-check.py ― 장치 연결 점검 (전방 · 후방 GPS, 아두이노)
+check.py ― 장치 연결 점검 (전방 · 후방 GPS, 구동 아두이노, 조이스틱)
 ════════════════════════════════════════════════════════════════════════════════
-    ros2 run broon check            전방 GPS + 아두이노 (white1 구성)
-    ros2 run broon check --dual     후방 GPS 까지 있어야 통과 (white2 구성)
-    ros2 run broon check --arduino  아두이노 포트도 열어 2초 동안 오는 바이트를 본다
+    ros2 run broon check            전방 GPS + 구동 아두이노 + 조이스틱 (white1 구성)
+    ros2 run broon check --dual     후방 GPS 까지 있어야 통과 (듀얼 구성)
+    ros2 run broon check --no-joy   조이스틱이 없어도 통과
 
-★one_launch 를 끄고★ 돌린다 — 노드가 포트를 쥐고 있으면 열 수 없어 '사용 중' 으로 나온다. ROS 노드가 아니다.
+★런치(broon.launch · one.launch)를 끄고★ 돌린다 — 노드가 포트를 쥐고 있으면 열 수 없어 '사용 중' 으로 나온다.
+ROS 노드가 아니다.
 
-  GPS     u-blox(VID 1546) 포트를 하나씩 열어 칩 고유 ID · 펌웨어를 ★조회만★ 하고(설정은 바꾸지 않는다)
-          2초 동안 들어오는 NAV-PVT · GGA 로 측위 상태를 본다. 배치 설정(config/gps_setting.json —
-          ros2 run broon gps_setting)의 ID 와 맞춰 전방 · 후방을 표시한다.
-  아두이노 USB 목록에 있는지 본다(UNO R4 Minima = 2341:0069). 새 규약은 아두이노 → PC 응답이 없어
-          통신 자체는 확인할 수 없다. --arduino 면 포트를 열어 오는 바이트만 본다(아무것도 보내지 않는다).
+  GPS      u-blox(VID 1546) 포트를 하나씩 열어 칩 고유 ID · 펌웨어를 ★조회만★ 하고(설정은 바꾸지 않는다)
+           2초 동안 들어오는 NAV-PVT · GGA 로 측위 상태를 본다. 배치 설정(config/gps_setting.json —
+           ros2 run broon gps_setting)의 ID 와 맞춰 전방 · 후방을 표시한다.
+  아두이노 arduino 노드와 같은 방법으로 가른다(boards.py) — 아두이노 포트를 모두 열어 최대 3.5 초 동안 줄을 읽고,
+           "J," 줄을 보내는 쪽 = ★조이스틱★(메가), 나머지 = ★구동계★(우노). 아무것도 보내지 않는다.
+           구동은 broon_1119 의 출력 "받은 펄스 받은 조향 실측 펄스 실측 조향" 이 오는지까지 본다.
+           메가는 포트를 열면 리셋된다(부트로더 1 ~ 2 초) — 그래서 기다린다.
 
-끝 상태 : 전방 GPS(--dual 이면 후방도) + 아두이노가 다 확인되면 0, 아니면 1.
+끝 상태 : 전방 GPS(--dual 이면 후방도) + 구동 아두이노 + 조이스틱(--no-joy 면 빼고)이 다 확인되면 0, 아니면 1.
 """
 
 import argparse
@@ -23,14 +26,11 @@ import sys
 import time
 
 import serial
-import serial.tools.list_ports
 
-from broon import gpsdev
-from broon.arduino import ARDUINO_VIDS, BAUD, R4_MINIMA
+from broon import boards, gpsdev
 from broon.gpsdev import F9PStream, Q_LABEL, ROLE_KO, pvt_quality
 
 GPS_LISTEN_S = 2.0
-ARDUINO_LISTEN_S = 2.0
 OK, WARN, BAD = "✅", "⚠️ ", "❌"
 
 
@@ -102,55 +102,65 @@ def check_gps(need_rear):
     return ok
 
 
-def check_arduino(open_it):
-    print("\n■ 아두이노 (VID 2341 · 2a03 · 1a86 — UNO R4 Minima 는 2341:0069)")
-    found = sorted((0 if (p.vid, p.pid) == R4_MINIMA else 1, p.device, p.vid, p.pid, p.product or p.description or "")
-                   for p in serial.tools.list_ports.comports() if p.vid in ARDUINO_VIDS)
+def check_arduino(need_joy):
+    """(구동 ok, 조이스틱 ok)"""
+    print("\n■ 아두이노 — \"J,\" 줄 = 조이스틱, 나머지 = 구동 (UNO R4 Minima 는 2341:0069)")
+    found = boards.candidate_ports()
     if not found:
         say(BAD, "아두이노가 USB 에 없다 — 케이블 · 전원 확인")
-        return False
-    for rank, dev, vid, pid, desc in found:
-        kind = "UNO R4 Minima" if rank == 0 else "R4 Minima 가 아니다"
-        say(OK if rank == 0 else WARN, f"{dev}  ({vid:04x}:{pid:04x} {desc}) — {kind}")
-    if len(found) > 1:
-        say(WARN, f"아두이노 후보가 {len(found)}개 — arduino 노드는 {found[0][1]} 를 연다")
-    if not open_it:
-        say("  ", "새 규약은 아두이노 → PC 응답이 없어 통신은 확인하지 못한다. 오는 바이트를 보려면 --arduino")
-        return True
-    dev = found[0][1]
-    try:
-        ser = serial.Serial(dev, BAUD, timeout=0.1, exclusive=True)
-    except (serial.SerialException, OSError) as e:
-        say(BAD, f"{dev} 열기 실패: {e}", 6)
-        return False
-    buf, t0 = b"", time.time()
-    try:
-        while time.time() - t0 < ARDUINO_LISTEN_S:
-            buf += ser.read(256)
-    except (serial.SerialException, OSError) as e:
-        say(BAD, f"읽기 중 단절: {e}", 6)
-        return False
-    finally:
-        ser.close()
-    if buf:
-        say(OK, f"{ARDUINO_LISTEN_S:.0f}초 동안 {len(buf)}바이트 옴: {buf[:32].hex(' ')} {buf[:32]!r}", 6)
+        say(BAD if need_joy else WARN, "조이스틱 없음")
+        return False, not need_joy
+    for dev, vid, pid, desc in found:
+        kind = " — UNO R4 Minima" if (vid, pid) == boards.R4_MINIMA else ""
+        say("  ", f"{dev}  ({(vid or 0):04x}:{(pid or 0):04x} {desc}){kind}")
+    print(f"   … 포트를 모두 열어 최대 {boards.DETECT_WINDOW_S:.1f}초 동안 줄을 읽는다 (메가는 리셋된다)")
+    res = boards.probe([d for d, *_ in found], keep_drive=False)
+    for dev, why in res['busy'].items():
+        say(BAD, f"{dev} 열기 실패 — 런치가 쥐고 있나? ({why})", 6)
+
+    drive_ok = False
+    if res['drive']:
+        lines = res['lines'].get(res['drive'], [])
+        fbs = [fb for fb in (boards.parse_drive_line(t) for t in lines) if fb is not None]
+        if fbs:
+            r, a, m, ma = fbs[-1]
+            say(OK, f"구동 = {res['drive']} — 출력 정상 (받은 {r:+d} {a:+d}° · 실측 {m:+d} {ma:+.2f}°)", 6)
+            drive_ok = True
+        elif lines:
+            say(WARN, f"구동 = {res['drive']} — 줄은 오는데 broon_1119 출력 형식이 아니다: {lines[-1]!r} "
+                      f"(스케치 확인)", 6)
+        else:
+            say(WARN, f"구동 = {res['drive']} — 아무 줄도 안 온다 (broon_1119 를 올렸나?)", 6)
     else:
-        say("  ", f"{ARDUINO_LISTEN_S:.0f}초 동안 온 바이트 없음 (규약상 정상 — 아두이노는 받기만 한다)", 6)
-    return True
+        say(BAD, "구동 아두이노 없음 (\"J,\" 를 보내지 않는 아두이노가 없다)", 6)
+    for dev in res['extra']:
+        say(WARN, f"{dev} — 구동 후보가 하나 더 있다. arduino 노드는 하나만 쓴다", 6)
+
+    joy_ok = False
+    if res['joy']:
+        vals = [v for v in (boards.parse_joy_line(t) for t in res['lines'].get(res['joy'], [])) if isinstance(v, tuple)]
+        sw = f" — SWA {'ON' if vals[-1][8] else 'OFF'}, L({vals[-1][0]},{vals[-1][1]}) R({vals[-1][3]},{vals[-1][4]})" \
+            if vals else ""
+        say(OK, f"조이스틱 = {res['joy']}{sw}", 6)
+        joy_ok = True
+    else:
+        say(BAD if need_joy else WARN, "조이스틱 없음 (\"J,\" 줄을 보내는 아두이노가 없다)", 6)
+    return drive_ok, joy_ok or not need_joy
 
 
 def main(args=None):
-    ap = argparse.ArgumentParser(prog="ros2 run broon check", description="전방 · 후방 GPS, 아두이노 연결 점검")
-    ap.add_argument("--dual", action="store_true", help="후방 GPS 도 있어야 통과 (white2)")
-    ap.add_argument("--arduino", action="store_true", help="아두이노 포트를 열어 오는 바이트를 본다")
+    ap = argparse.ArgumentParser(prog="ros2 run broon check", description="GPS · 구동 아두이노 · 조이스틱 연결 점검")
+    ap.add_argument("--dual", action="store_true", help="후방 GPS 도 있어야 통과 (듀얼 구성)")
+    ap.add_argument("--no-joy", action="store_true", help="조이스틱이 없어도 통과")
     opt, _ = ap.parse_known_args(args if args is not None else sys.argv[1:])
-    print("broon 장치 점검 — one_launch 가 떠 있으면 포트가 '사용 중' 으로 나온다")
+    print("broon 장치 점검 — 런치가 떠 있으면 포트가 '사용 중' 으로 나온다")
     gps_ok = check_gps(opt.dual)
-    ard_ok = check_arduino(opt.arduino)
+    drive_ok, joy_ok = check_arduino(not opt.no_joy)
     print("\n■ 요약")
     say(OK if gps_ok else BAD, "GPS" + (" (전방 + 후방)" if opt.dual else " (전방)"))
-    say(OK if ard_ok else BAD, "아두이노")
-    sys.exit(0 if (gps_ok and ard_ok) else 1)
+    say(OK if drive_ok else BAD, "구동 아두이노")
+    say(OK if joy_ok else BAD, "조이스틱" + (" (없어도 통과 — --no-joy)" if opt.no_joy else ""))
+    sys.exit(0 if (gps_ok and drive_ok and joy_ok) else 1)
 
 
 if __name__ == '__main__':

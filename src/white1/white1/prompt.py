@@ -5,10 +5,12 @@ prompt.py ― CLI 메인 화면 [black prompt.py + gold white1 prompt.py]
 ════════════════════════════════════════════════════════════════════════════════
     ros2 run white1 prompt          (★별 터미널★ — one_launch.py 를 먼저 띄운다)
 
-  1) 매핑   — 손으로(리모컨 등) 몰면 0.25 m 마다 기록된다. Enter 를 누르면 저장하고 메뉴로.
+  1) 매핑   — 조이스틱(SWA ON)으로 몰면 GPS 궤적이 0.25 m 마다 기록된다. Enter 를 누르면 끝내고
+              ★일련번호를 묻는다★ — 그냥 Enter = map_<연도월일_시분초>.csv, 421 = map_421.csv (2026-11-19 사용자 지정).
   2) 주행   — 경로 CSV 를 고르면 바로 출발한다: 조향 0 으로 곧게 굴러 헤딩을 잡은 뒤 경로추종.
               Enter = 정지. 도착 · 경로이탈 · 정지 뒤 바퀴가 서면 메뉴로 돌아온다.
-              ★출발은 RTK Fixed 일 때만 된다★ — 아니면 거절되고 그 이유가 나온다.
+              ★출발은 RTK Fixed 이고 조이스틱 SWA 가 OFF 일 때만 된다★ — 아니면 거절되고 그 이유가 나온다.
+              주행 중 조이스틱 SWA 를 ON 으로 바꾸면 자율주행이 멈추고 조이스틱이 차를 쥔다.
               순환 경로(마지막 줄 mod 에 return — 목록에 🔁)는 도착 없이 계속 돈다 — Enter 로 멈춘다.
   3) 경로 목록 — 매핑 CSV 양식(lat,lon,…)만 쓸 수 있다. 옛 양식 파일은 '옛 양식' 으로 표시된다.
   4) 종료
@@ -57,6 +59,7 @@ class PromptNode(Node):
         self.route_dir = ''
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.pub_cmd = self.create_publisher(String, '/drive_cmd', 10)
+        self.pub_save = self.create_publisher(String, '/mapping_save', 10)
         self.create_subscription(String, '/drive_state', self.cb_state, 10)
         self.create_subscription(String, '/drive_event', self.cb_event, 50)
         self.create_subscription(String, '/drive_status', self.cb_dstatus, 10)
@@ -189,7 +192,7 @@ class Screen:
             self.print_events()
             return
         self.print_events()
-        print("   🗺️ 매핑 중 — 손으로(리모컨 등) ★전진으로★ 몰 것.  [Enter] 저장하고 메뉴로")
+        print("   🗺️ 매핑 중 — 조이스틱(SWA ON)으로 몰 것 (GPS 궤적만 적는다, 후진은 dir 1).  [Enter] 끝내고 저장")
         while True:
             for p in self.node.drain_points():
                 print(f"   {p}")
@@ -207,7 +210,24 @@ class Screen:
         for p in self.node.drain_points():
             print(f"   {p}")
         self.print_events()
-        print(f"   {self.node.map_done or '⚠️ 저장 결과를 받지 못했다 (mapping 노드?)'}")
+        done = self.node.map_done
+        print(f"   {done or '⚠️ 저장 결과를 받지 못했다 (mapping 노드?)'}")
+        if done and (done.startswith('💾') or ('수집된 점이' in done and '삭제' not in done)):
+            self.name_map()
+
+    def name_map(self):
+        """일련번호를 받아 mapping 노드에 넘긴다 (/mapping_save). 이미 있는 이름이면 다시 묻는다."""
+        while True:
+            ans = self.ask("   일련번호 (Enter = 날짜_시각 이름 그대로, 예 421 → map_421.csv): ")
+            self.node.map_done = ''
+            self.node.pub_save.publish(String(data=ans or ''))
+            t0 = time.time()
+            while not self.node.map_done and time.time() - t0 < START_WAIT_S:
+                time.sleep(0.05)
+            reply = self.node.map_done or '⚠️ 답을 받지 못했다 (mapping 노드?) — 날짜_시각 이름 그대로 남는다'
+            print(f"   {reply}")
+            if ans is None or not reply.startswith('❌'):
+                return
 
     # ── 2) 주행 ──────────────────────────────────────────────────────────────
     def run_drive(self):
