@@ -54,6 +54,8 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   │                            "00:00:00     OFF" / "REF:+35 -12 00km"(속도계 00 고정). ★라이브러리 "LiquidCrystal I2C"(Frank de Brabander) 필요★
 │   ├── joy_nolcd.ino          joy.ino 에서 LCD 관련(I2C LCD · 'U' 줄 해석 · SWB 타이머)을 모두 뺀 판 (2026-11-19, LCD 교체 전까지).
 │   │                            핀 · 250 Hz · "J,…,on" 줄 · J,RESET · SWA ON/OFF 는 같다 → PC 쪽 그대로. 라이브러리 없음. 컴파일만 했다
+│   ├── joy_nano.ino           joy_nolcd.ino 를 나노(ATmega328P)로 — ★핀만 다르다★ (2026-11-19). L A4 · A5 · D8, R A6 · A7 · D5, SWA D7 · SWB D6.
+│   │                            우리 나노는 FTDI FT232R(0403:6001, /dev/ttyUSB*). 실물로 줄 250 Hz · broon 판별 · joy 영점까지 확인
 │   ├── arduino_code.ino       white 용 Mega 펌웨어 초안(white_fw) — ★보드에 올린 적 없다★
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트(CHANGE)로 A · B 상 에지 수를 1 s 마다 따로 (11-16 바꿈)
@@ -150,7 +152,7 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 | 안테나 자리 | white : 뒷차축 위 / white1 : 전방(뒷차축 앞 `antenna_base_m`) / white2 : 전방 + 후방(뒷차축 위), 간격 `antenna_base_m` |
 | 안테나 간격 | **1.0 m** (사용자 지정 2026-11-11). ⚠️ 휠베이스 0.73 m 와 다르다 — 안테나가 정확히 두 차축 위라면 같아야 한다. **실측 필요**(A5) |
 | IMU | iAHRS (CP210x) — `white` 만 쓴다 |
-| 아두이노 (새) | 구동 **UNO R4 Minima** = `tool/arduino_code/broon_1119.ino`(전방 · 후방 구동 + 조향), 조이스틱 **Mega 2560** = `tool/joy.ino`. 규약 아래 절 |
+| 아두이노 (새) | 구동 **UNO R4 Minima** = `tool/arduino_code/broon_1119.ino`(전방 · 후방 구동 + 조향), 조이스틱 **Nano(FTDI)** = `tool/joy_nano.ino` 또는 **Mega 2560** = `tool/joy_nolcd.ino` (LCD 판 `tool/joy.ino` 는 broon 과 안 맞는다 — 2026-11-19 LCD 제거). 규약 아래 절 |
 | 아두이노 (지금 차) | Mega 2560, **115200 bps 로 도는 v6 계열 스케치**(2026-11-09 포트를 직접 들어 확인. 원본 소스는 어디에도 없다). `~/Arduino/arduino_backup`(Vr.1, 57600)이 아니다 |
 | 조향 가변저항 | Mega **A15**. Vr.1 코드값(`legacy_white.ino`) : `analogRead − 512` 를 **−460 ~ 423** 으로 자른다 = ADC **52 ~ 935** (5 V 기준 0.25 ~ 4.57 V) ↔ **−19° ~ +19°** 직선. 0° 는 ADC 493.5 (512 가 아니다), 1° ≈ 23 카운트. 한계에 닿으면 조향 모터를 양방향 다 끈다. ★코드값일 뿐 실측 아니다★ (2026-11-12 확인) |
 | 조향 (새 R4) | 모터 드라이버 **Cytron MD20A, PWM 10 · DIR 8** (레거시 Mega 와 다른 모델). MD20A 는 DIR Low → MA 출력 High(데이터시트 표 3), 이 차는 MA 버튼 = 우 · MB = 좌 → **DIR LOW = 우**. PWM Low = 브레이크. 가변저항 **A0** : **좌 끝 ADC 954 (실측 2026-11-16)** · 우 끝 ADC 52 (Vr.1 값, 미실측) → **값이 클수록 좌** (레거시 코드는 52 쪽을 LEFT 로 불렀다 — 이름이 반대). 이를 **−21° ~ +21° (− 좌 · + 우)** 로 잇는다 — 실제 바퀴 각은 나중에 실측해 고친다 (사용자 지정 2026-11-16, `steer_test_1116.ino`). 기구 끝에서는 모터가 헛돌 뿐이라 **소프트웨어 끝 보호는 넣지 않는다** (사용자 지시). 조향 PID 실차 시험(2026-11-16) : 넘침 없음(감쇠 충분), 움직이기 시작하는 PWM ≈ 10(가운데) ~ 25(±18°), Kp 8 · Ki 10 은 I 가 다음 동작으로 넘어가 복귀가 느림 → 기본값 Kp 12 · Ki 20 · Kd 0 (모형 시뮬레이션 제안, 실차 확인 전) |
@@ -159,11 +161,14 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 ### 아두이노 규약 (2026-11-19 — 정본은 `src/broon/broon/boards.py` 머리말)
 
 - **판별** : 보드 종류와 상관없이 `J,` 로 시작하는 줄을 보내는 아두이노 = 조이스틱, 나머지 아두이노 = 구동(사용자 지정).
-  `broon/arduino` 가 판별하고 조이스틱 포트는 `/joy_port`(래치)로 `broon/joy` 에 넘긴다(메가는 포트를 열 때마다 리셋된다 — 두 번).
+  `broon/arduino` 가 판별하고 조이스틱 포트는 `/joy_port`(래치)로 `broon/joy` 에 넘긴다(메가 · 나노는 포트를 열 때마다 리셋된다 — 두 번).
+  후보 USB VID : Arduino 2341 · CH340 1A86 · arduino.org 2A03, 그리고 **FTDI 0403 은 조이스틱으로만**(`J,` 를 안 보내면 구동 후보에서도 뺀다 —
+  FTDI 를 쓰는 다른 장치에 구동 명령을 쓰지 않게. 2026-11-19 나노가 FTDI 라 판별 못 하던 것을 고침).
 - **PC → 구동 우노** : `"<펄스> <조향>\n"` 두 정수(소수점이 든 줄은 우노가 버린다). `broon/arduino` 는 `/cmd_vel` 을 받는 즉시 한 줄 보내고
   ★스스로 되풀이하지 않는다★ — 명령을 내는 노드가 죽으면 우노의 명령 시한(2 초, 구동 PWM 0 · 조향 유지)이 세운다.
 - **구동 우노 → PC** : 50 ms 마다 `"<받은 펄스> <받은 조향> <실측 펄스> <실측 조향각>"` → `/enc_pot`(Float64MultiArray 4칸).
-- **조이스틱 메가 → PC** : 4 ms 마다 `J,x1,y1,k1,x2,y2,k2,swa,swb,on`. PC → 메가 : `U,<펄스>,<조향>`(LCD).
+- **조이스틱 보드 → PC** : 4 ms 마다 `J,x1,y1,k1,x2,y2,k2,swa,swb,on`, 부팅 끝에 `J,RESET`. **PC → 조이스틱 보드 : 없다**
+  (2026-11-19 broon 에서 LCD 를 빼며 `U,<펄스>,<조향>` 줄도 없앴다 — 보드에 쓰지 않으니 메가 부트로더가 막히던 문제도 사라졌다).
 - 토픽 : `/cmd_vel`(Int32MultiArray [펄스, 조향] — joy · driving 이 내고 arduino 가 받는다. 길이 · 범위가 틀리면 버린다) ·
   `/enc_pot` · `/joy318`(Int32 1) · `/joy_port` · `/arduino_status`.
 - 2026-11-11 의 4바이트 바이너리 규약(0xAA · km/h · + 좌)은 버렸다. white2 는 아직 그 시절 토픽(`/cmd_vel_raw`)을 낸다.
@@ -208,6 +213,10 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
       2026-11-19 실물 메가 첫 시험 : '영점 보정 중' 이 안 끝나고 LCD 가 흰 블록 — joy 가 포트를 열자마자(메가 리셋 → 부트로더)
       LCD 줄(U)을 20 Hz 로 써서 메가 2560 부트로더(stk500v2)가 스케치로 못 넘어갔다. → 메가 줄이 0.05 s 안에 왔을 때만 쓰게 고쳤다
       (tool/joy.py 도). 리셋 감지(J,RESET) 때 영점은 기다리지 않고 바로 다시 잡는다(사용자 지정). 고친 판은 실물로 다시 확인할 것.
+      2026-11-19 오후 : broon 에서 LCD 를 뺐다(joy 는 보드에 아무것도 안 쓴다, 화면의 'LCD 둘째 줄' 도 뺐다). 조이스틱을 나노(FTDI)로 바꿈 →
+      boards 가 FTDI 를 후보로 보지 않아 판별 실패 → FTDI 를 조이스틱 전용 후보로 넣었다. 실물 나노 + R4 로 판별(joy=ttyUSB0 · 구동=ttyACM0),
+      joy 노드 단독(256 줄/s · J,RESET · 영점)까지 확인. 열고 J,RESET 까지 ~1.7 s 라 '줄이 안 온다' 경고를 2.5 s 로 늦췄다.
+      ★arduino 노드와 함께 · SWA ON 발행 · 실차는 아직★.
 - [ ] `pulse_per_mps`(1 m/s = 45 펄스) 는 추정 — 곧게 달린 기록의 `gps_kmh` 와 `meas_pulse` 로 맞춘다. 조향 트림 · 게인(지금 중립)도 실차로.
 - [ ] 조향 눈금 : 가변저항 ±21° 가 실제 바퀴각인지 (driving 의 순수추종은 이 값을 바퀴각으로 본다).
 - [ ] 조이스틱 개입 : SWA ON 순간 "0 0" 마무리와 driving 의 마지막 명령이 겹칠 때 차가 곧 서는지(가상에서는 경합 0개).

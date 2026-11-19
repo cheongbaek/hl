@@ -113,7 +113,7 @@ def check_arduino(need_joy):
     for dev, vid, pid, desc in found:
         kind = " — UNO R4 Minima" if (vid, pid) == boards.R4_MINIMA else ""
         say("  ", f"{dev}  ({(vid or 0):04x}:{(pid or 0):04x} {desc}){kind}")
-    print(f"   … 포트를 모두 열어 최대 {boards.DETECT_WINDOW_S:.1f}초 동안 줄을 읽는다 (메가는 리셋된다)")
+    print(f"   … 포트를 모두 열어 최대 {boards.DETECT_WINDOW_S:.1f}초 동안 줄을 읽는다 (메가 · 나노는 리셋된다)")
     res = boards.probe([d for d, *_ in found], keep_drive=False)
     for dev, why in res['busy'].items():
         say(BAD, f"{dev} 열기 실패 — 런치가 쥐고 있나? ({why})", 6)

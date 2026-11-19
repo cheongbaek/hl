@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-joy.py ― 조이스틱 '메가'(tool/joy.ino) → /cmd_vel · /joy318 + 화면 [broon]  (2026-11-19, tool/joy.py 를 ROS 노드로)
+joy.py ― 조이스틱 보드 → /cmd_vel · /joy318 + 화면 [broon]  (2026-11-19, tool/joy.py 를 ROS 노드로)
 ════════════════════════════════════════════════════════════════════════════════
     ros2 run broon joy              화면(tkinter)과 함께
     ros2 run broon joy --nogui      화면 없이 (1 초마다 상태 한 줄)
     ros2 run broon joy --ros-args -p port:=/dev/ttyACM1     포트를 직접 정할 때
 
-★포트는 스스로 찾지 않는다★ — arduino 노드가 판별해 /joy_port (래치)로 알려 준 포트를 연다(사용자 지정).
-arduino 노드가 없으면 기다리기만 한다(화면에 '포트 기다리는 중'). 포트를 열면 메가가 리셋되고 "J,RESET" 을 보낸다.
+조이스틱 보드 = 메가(tool/joy_nolcd.ino) 또는 나노(tool/joy_nano.ino) — 핀만 다르고 줄은 똑같다.
+★보드에는 아무것도 쓰지 않고 읽기만 한다★ (2026-11-19).
 
-SWA (메가 LCD 의 ON/OFF — 메가 안에서 바뀐다. 켜면 OFF) — 2026-11-19 사용자 지정
+★포트는 스스로 찾지 않는다★ — arduino 노드가 판별해 /joy_port (래치)로 알려 준 포트를 연다(사용자 지정).
+arduino 노드가 없으면 기다리기만 한다(화면에 '포트 기다리는 중'). 포트를 열면 보드가 리셋되고 "J,RESET" 을 보낸다.
+
+SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11-19 사용자 지정
   ON  = 조이스틱 신호를 보낸다.   OFF = 스틱을 움직여도 무시한다(아무것도 안 낸다).
   ★자율주행 정지는 SWA 가 ON 으로 바뀌는 순간에만★ 일어난다 — 아래 /joy318.
 
@@ -29,20 +32,18 @@ SWA (메가 LCD 의 ON/OFF — 메가 안에서 바뀐다. 켜면 OFF) — 2026-
       → 자율주행은 SWA OFF 에서만 돌고, 조이스틱이 자율을 멈추는 때는 ON 으로 바꾸는 순간뿐이다.
 
 구독
-  /joy_port (String, 래치) — 열 포트.   /enc_pot (Float64MultiArray) — 우노가 받은 명령 · 실측 → 메가 LCD "U,펄스,각"
-      (LCD 둘째 줄 각도 = 우노가 받은 목표 조향각. 자율주행 중에는 driving 의 명령이 뜬다)
-      ★메가가 줄을 보내고 있을 때만 쓴다★ — 마지막 줄을 받은 지 MEGA_LIVE_S(0.05 s, 평소 4 ms 간격)가 넘으면 쓰지 않는다.
-      포트를 열거나 리셋 버튼을 누르면 메가는 부트로더부터 도는데, 메가 2560 의 부트로더(stk500v2)는 바이트가 계속
-      들어오면 스케치로 넘어가지 않는다 → LCD 가 초기화 전(흰 블록)으로 남고 "J," 줄이 안 와 영점이 끝나지 않는다
-      (2026-11-19 실물에서 겪음: 우노가 붙어 /enc_pot 이 20 Hz 로 오면 열자마자 쓰기 시작했다).
+  /joy_port (String, 래치) — 열 포트.
+  /enc_pot (Float64MultiArray) — 우노가 받은 명령 · 실측. ★화면에 띄우기만 한다★ (보드로 넘기지 않는다).
+  보드에 쓰지 않으니 부트로더 문제도 없다 — 예전에 PC 가 보드에 줄을 쓰다가 메가 2560 부트로더(stk500v2)가
+  스케치로 못 넘어간 일이 있었다(2026-11-19 실물). 다시 보드에 쓰는 기능을 넣으면 이 점을 먼저 볼 것.
 
 스틱 → 값 · 영점 (tool/joy.py 와 같다)
   영점에서 ADC 120 안은 0 (데드존), 그 밖은 1 ~ 최댓값에 직선으로 잇는다.
-  영점 : ★파이썬이 메가에서 받은 값으로 잡는다★ — 연결하면 처음 0.3 s (75 줄)의 중앙값.
-         메가 리셋 버튼 → 부팅 끝에 "J,RESET" → ★받는 즉시 같은 방법(0.3 s 중앙값)으로 다시 잡는다★ (기다리지 않는다 —
+  영점 : ★파이썬이 보드에서 받은 값으로 잡는다★ — 연결하면 처음 0.3 s (75 줄)의 중앙값.
+         보드 리셋 버튼 → 부팅 끝에 "J,RESET" → ★받는 즉시 같은 방법(0.3 s 중앙값)으로 다시 잡는다★ (기다리지 않는다 —
          2026-11-19 사용자 지정. 옛 joy_gold · tool/joy.py 는 3 초 뒤 값 한 벌이었다). 보정하는 0.3 s 동안 스틱은 0 으로 본다.
-  메가 줄이 1 s 넘게 안 오면 화면 상태 줄에 '메가에서 줄이 안 온다' 를 띄운다(부트로더에 머묾 · 다른 스케치 · 배선).
-⚠️ 실물 메가 첫 시험(2026-11-19)에서 위 부트로더 문제를 찾아 고쳤다 — 고친 판은 아직 실물로 다시 확인하지 않았다.
+  보드 줄이 2.5 s 넘게 안 오면 화면 상태 줄에 '보드에서 줄이 안 온다' 를 띄운다(다른 스케치 · 배선).
+⚠️ joy_nolcd · joy_nano 와 이 노드는 아직 실물로 함께 돌려 보지 않았다.
 """
 
 import os
@@ -68,9 +69,8 @@ ZERO_TAIL_S = 0.5            # 0 으로 돌아오면 "0 0" 을 이만큼 내고 
 JOY318_S = 0.1               # SWA ON 동안 /joy318 간격
 TICK_S = 0.02                # 재발행 · 마무리 · /joy318 를 살피는 주기
 
-CALIBRATION_SAMPLES = 75     # 영점에 쓰는 메가 줄 수 (250 Hz → 0.3 s) — 연결 때 · 리셋 때 같다
-MEGA_LIVE_S = 0.05           # 마지막 메가 줄이 이보다 오래되면 메가에 쓰지 않는다 (부트로더 보호, 평소 4 ms 간격)
-MEGA_SILENT_S = 1.0          # 이만큼 줄이 없으면 화면에 '메가에서 줄이 안 온다'
+CALIBRATION_SAMPLES = 75     # 영점에 쓰는 보드 줄 수 (250 Hz → 0.3 s) — 연결 때 · 리셋 때 같다
+BOARD_SILENT_S = 2.5         # 이만큼 줄이 없으면 화면에 '보드에서 줄이 안 온다' (열 때 부트로더 ~1.7 s 를 넘게)
 ADC_MAX = 1023
 DEADZONE_RAW = 120
 DEFAULT_CENTER = ADC_MAX // 2
@@ -144,11 +144,10 @@ class JoyNode(Node):
         self.joy_lines = 0
         self.center = {"x1": DEFAULT_CENTER, "y1": DEFAULT_CENTER, "x2": DEFAULT_CENTER, "y2": DEFAULT_CENTER}
         self.calib_buf = None
-        self.line_t = 0.0            # 메가에서 마지막으로 올바른 줄을 받은 때 (monotonic)
-        self.mega_writable = False   # 지금 연결에서 메가 줄을 한 번이라도 받았다 (부팅이 끝났다)
+        self.line_t = 0.0            # 보드에서 마지막으로 올바른 줄을 받은 때 (monotonic)
         self.status = ("조이스틱 포트 기다리는 중 — arduino 노드가 /joy_port 로 알려 준다", "warn")
 
-        self.on = False              # SWA ON (메가가 알려 준 값)
+        self.on = False              # SWA ON (보드가 알려 준 값)
         self.cmd = (0, 0)            # 지금 스틱이 뜻하는 값 (OFF · 보정 중이면 0 0)
         self.engaged = False         # 0 이 아닌 값을 내는 중
         self.tail_until = None       # "0 0" 마무리 끝 시각
@@ -197,17 +196,19 @@ class JoyNode(Node):
                 self.stop_evt.wait(REOPEN_S)
                 continue
             with self.lock:
-                self.line_t = time.monotonic()          # 여는 순간부터 MEGA_SILENT_S 를 센다 (쓰기는 줄이 와야 한다)
+                self.line_t = time.monotonic()          # 여는 순간부터 BOARD_SILENT_S 를 센다
                 self.calib_buf = {"x1": [], "y1": [], "x2": [], "y2": []}   # 연결마다 영점을 새로 잡는다
-                self.status = ("영점 보정 중... (메가 리셋 버튼으로 재보정)", "text")
+                self.status = ("영점 보정 중... (보드 리셋 버튼으로 재보정)", "text")
             with self.ser_lock:
                 self.ser, self.port = ser, dev
-            self.mega_writable = False                  # 열면 메가가 리셋된다 — 첫 줄이 오기 전엔 쓰지 않는다
             self.get_logger().info(f"🎮 조이스틱 연결 {dev}")
             try:
                 self._read_loop(ser, dev)
             except (serial.SerialException, OSError) as e:
                 self.get_logger().error(f"조이스틱 단절 {dev}: {e}")
+            except TypeError:
+                if not self.stop_evt.is_set():
+                    raise                       # 끝낼 때만 무시 — shutdown() 이 포트를 닫으면 읽던 read() 가 TypeError
             finally:
                 with self.ser_lock:
                     self.ser, self.port = None, ''
@@ -229,7 +230,6 @@ class JoyNode(Node):
                     continue
                 with self.lock:
                     self.line_t = time.monotonic()
-                    self.mega_writable = True
                     if v == 'RESET':
                         self._on_reset()
                     else:
@@ -246,10 +246,10 @@ class JoyNode(Node):
 
     # ── 영점 ─────────────────────────────────────────────────────────────────
     def _on_reset(self):
-        """메가가 막 부팅했다(리셋 버튼 · 포트 열기) — 곧바로 영점을 다시 잡는다(0.3 s 중앙값)."""
+        """보드가 막 부팅했다(리셋 버튼 · 포트 열기) — 곧바로 영점을 다시 잡는다(0.3 s 중앙값)."""
         self.calib_buf = {"x1": [], "y1": [], "x2": [], "y2": []}
         self.status = ("리셋 감지 — 영점을 다시 잡는다", "text")
-        self.get_logger().info("메가 리셋 감지(J,RESET) — 영점을 다시 잡는다")
+        self.get_logger().info("조이스틱 보드 리셋 감지(J,RESET) — 영점을 다시 잡는다")
 
     def _step_calibration(self, d):
         x1, y1, _, x2, y2 = d[:5]
@@ -267,10 +267,10 @@ class JoyNode(Node):
         return self.calib_buf is not None
 
     def current_status(self):
-        """화면 · 콘솔용 상태 — 연결됐는데 메가 줄이 끊겼으면 그것을 먼저 알린다."""
-        if self.ser is not None and time.monotonic() - self.line_t > MEGA_SILENT_S:
-            return (f"메가에서 줄이 안 온다 ({time.monotonic() - self.line_t:.0f}s) — 부트로더에 머묾? 다른 스케치? "
-                    f"메가 리셋 버튼을 눌러 볼 것", "bad")
+        """화면 · 콘솔용 상태 — 연결됐는데 보드 줄이 끊겼으면 그것을 먼저 알린다."""
+        if self.ser is not None and time.monotonic() - self.line_t > BOARD_SILENT_S:
+            return (f"보드에서 줄이 안 온다 ({time.monotonic() - self.line_t:.0f}s) — 다른 스케치? 배선? "
+                    f"보드 리셋 버튼을 눌러 볼 것", "bad")
         return self.status
 
     # ── 발행 규칙 (self.lock 안에서 부른다) ─────────────────────────────────────
@@ -328,21 +328,12 @@ class JoyNode(Node):
             if self.on and self.ser is not None and now - self.joy318_t >= JOY318_S:
                 self._publish_318(now)
 
-    # ── 우노 출력 → 메가 LCD ──────────────────────────────────────────────────
+    # ── 우노 출력 → 화면 ─────────────────────────────────────────────────────
     def cb_enc(self, msg: Float64MultiArray):
         d = list(msg.data)
         if len(d) < 4:
             return
         self.fb, self.fb_t = d[:4], time.monotonic()
-        if not self.mega_writable or time.monotonic() - self.line_t > MEGA_LIVE_S:
-            return                            # 메가가 부트로더일 수 있다 — 쓰면 스케치로 못 넘어간다 (머리말)
-        with self.ser_lock:
-            if self.ser is None:
-                return
-            try:
-                self.ser.write(f"U,{int(round(d[0]))},{int(round(d[1]))}\n".encode('ascii'))
-            except (serial.SerialException, OSError):
-                pass                          # 읽기 쪽이 곧 끊김을 알아챈다
 
     def fb_fresh(self):
         return self.fb is not None and time.monotonic() - self.fb_t <= FB_STALE_S
@@ -402,8 +393,6 @@ class JoyWindow:
         self.j318_label.pack(fill=tk.X)
         self.fb_label = tk.Label(info, text="", bg=BG, fg=TEXT, font=("Consolas", 12), anchor="w")
         self.fb_label.pack(fill=tk.X)
-        self.lcd_label = tk.Label(info, text="", bg=BG, fg=TEXT, font=("Consolas", 11), anchor="w")
-        self.lcd_label.pack(fill=tk.X)
         bottom = tk.Frame(root, bg=BG)
         bottom.pack(fill=tk.X, padx=16, pady=(4, 10))
         self.status = tk.Label(bottom, text="", bg=BG, fg=TEXT, font=("Consolas", 10))
@@ -487,10 +476,8 @@ class JoyWindow:
         if n.fb_fresh():
             r, a, m, ma = n.fb
             self.fb_label.config(text=f"/enc_pot : 우노가 받은 {signed2(r)} · {int(a):+d}°    실측 {signed2(m)} · {ma:+.1f}°")
-            self.lcd_label.config(text=f"메가 LCD 둘째 줄 : REF:{signed2(r)} {signed2(a)} 00km")
         else:
             self.fb_label.config(text="/enc_pot : --- (arduino 노드 · 우노 확인)")
-            self.lcd_label.config(text="메가 LCD 둘째 줄 : REF:--- --- 00km")
         text, color = status
         self.status.config(text=f"[{port or '포트 없음'}] {text}", fg=COLORS[color])
         if not n.stop_evt.is_set():
@@ -505,7 +492,7 @@ def run_nogui(node, stop):
             lines = node.joy_lines - last_lines
             last_lines = node.joy_lines
             text = (("🛑 E-STOP | " if node.estop else "")
-                    + f"{'ON ' if node.on else 'OFF'} /cmd_vel {node.describe_cmd()} | 메가 {lines}줄/s | "
+                    + f"{'ON ' if node.on else 'OFF'} /cmd_vel {node.describe_cmd()} | 보드 {lines}줄/s | "
                     f"{node.current_status()[0]}")
         fb = node.fb if node.fb_fresh() else None
         text += f" | /enc_pot {fb[0]:+.0f} {fb[1]:+.0f}° 실측 {fb[2]:+.0f} {fb[3]:+.1f}°" if fb else " | /enc_pot ---"
