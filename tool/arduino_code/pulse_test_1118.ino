@@ -20,16 +20,21 @@
 // ── 방향 ─────────────────────────────────────────────────────────────────────────
 //   REF 부호 = 방향. + → DIR LOW, − → DIR HIGH (pulsetest 와 같다). PID 는 크기 |REF| 만 맞춘다.
 //   PWM 은 0 ~ 상한 — 반대로 돌려 감속하지 않는다 (방향을 모르는 계측이라 역회전을 섞으면 측정이 꼬인다).
-//     측정이 REF 보다 크면 PWM 이 0 까지 내려간다 (드라이버가 PWM Low 를 브레이크로 쓰면 브레이크, 아니면 관성).
-//   REF 부호가 바뀌면 I 를 지운다.
+//     측정이 REF 보다 크면 PWM 이 0 까지 내려갈 수 있다.
+//   이 드라이버는 PWM 을 지금 속도에 맞는 값보다 낮추면 그만큼 제동이 걸린다 — 0 만이 아니라 낮은 PWM 전반 (사용자 확인 2026-11-18).
+//     그래서 |PWM| 을 한 번에 떨어뜨리면 감속 충격이 난다 → 아래 '하강 제한'.
+//   REF 부호가 바뀌면 I 를 지운다. 이때도 옛 방향 PWM 을 하강 제한대로 0 까지 내린 뒤 새 방향으로 낸다.
 //
 // ── 제어 ─────────────────────────────────────────────────────────────────────────
 //   10 ms(100 Hz)마다 : 펄스값 세기 → PID → PWM.
 //   오차 = |REF| − 측정.   P = Kp · 오차.   I = Ki · 오차 적분.
 //   D = −Kd · (측정의 변화율) — 목표를 바꿀 때 튀지 않게 오차가 아니라 측정값으로 미분한다.
 //     측정이 10 ms 마다 에지 단위로 계단처럼 바뀌어 D 는 잡음이 크다 (1 에지/10 ms = 100 펄스/s) — 쓰려면 아주 작게.
-//   출력(PWM)은 0 ~ 상한으로 자른다. 출력이 상한 · 0 에 걸린 쪽으로는 I 를 더 쌓지 않는다 (와인드업 방지), 0 ≤ I ≤ 상한.
-//   REF 0 → PWM 0, PID 끄기, I 지우기.
+//   출력(PWM)은 0 ~ 상한으로 자른다. 출력이 상한 · 아래 한계에 걸린 쪽으로는 I 를 더 쌓지 않는다 (와인드업 방지), 0 ≤ I ≤ 상한.
+//   하강 제한 (2026-11-18) : |PWM| 이 줄 때만 1 초에 'r' PWM 보다 빨리 줄지 않게 한다 (기본 1000 = 10 ms 에 10). 늘 때는 그대로.
+//     PID 가 더 낮은 값을 원해도 이번 주기엔 '지난 |PWM| − r × 0.01' 까지만 내린다 → 제동이 서서히 걸린다.
+//     이 한계에 막혀 있는 동안은 I 를 줄이지 않는다 — 줄이면 제한이 풀린 뒤 PWM 이 너무 낮아 REF 아래로 처진다.
+//   REF 0 → PID 끄기, I 지우기, PWM 은 하강 제한을 따라 0 까지 내린다.  's' 는 제한 없이 바로 0.
 //   게인 단위 : Kp = PWM/펄스, Ki = PWM/(펄스·s), Kd = PWM/(펄스/s).   (펄스 = 위 펄스값 1)
 //   최소 PWM 보정 · 피드포워드 같은 것은 넣지 않았다 — PID 만으로 처음부터 튜닝한다.
 //   부팅 직후는 정지(PWM 0)다. 명령 시한(무수신 정지)은 넣지 않았다 — 0 이나 's' 로 세운다.
@@ -47,13 +52,15 @@
 //   뺌    음수 PWM (역회전으로 감속) — 레거시 카운터(LS7366R)는 방향을 알았지만 여기 계측은 모른다.
 //         black 백업의 'PWM ≥ 205 → 60' · '속도 ≥ 120 → 10' 처럼 넘으면 꺾어 떨어뜨리는 것 — 불연속이다.
 //         조향 PID 의 출력 변화율 제한 · 데드밴드 — 응답을 가려 튜닝이 헷갈린다 / 속도 제어에서는 멈칫댄다.
+//         (변화율 제한은 2026-11-18 감속 충격 때문에 '|PWM| 이 줄 때만' 으로 다시 넣었다 — 위 '하강 제한'. 'r 0' 이면 없다.)
 //
 // ── 입력 (PC → 아두이노) — 한 줄에 명령 하나, 줄 끝 '\n' · '\r' 어느 쪽이든 ────────────────
-//   35       정수만 → REF (펄스값, 부호 = 방향), PID 켜기.  0 → 정지
+//   35       정수만 → REF (펄스값, 부호 = 방향), PID 켜기.  0 → 정지 (PID 끄기, PWM 은 하강 제한을 따라 0 까지)
 //   p 1      Kp      i 0      Ki      d 0      Kd          (0 이상, 소수 가능)
 //   m 255    PWM 상한 (0 ~ 255)
-//   o 100    손 PWM (−255 ~ 255, PID 끄고 그대로 낸다 — pulsetest 와 같은 개루프 확인용. 'm' 상한은 그대로 걸린다)
-//   s        정지 (PWM 0, PID 끄기, I 지우기)
+//   r 1000   하강 제한 (PWM/s, 0 이상, 0 = 제한 없음 — 고치기 전과 같다). 작을수록 부드럽고 느리게 감속한다
+//   o 100    손 PWM (−255 ~ 255, PID 끄고 그대로 낸다 — pulsetest 와 같은 개루프 확인용. 'm' 상한은 걸리고 하강 제한은 안 걸린다)
+//   s        바로 정지 (PWM 0, PID 끄기, I 지우기 — 하강 제한 없이)
 //   글자는 대소문자 무관, 글자와 숫자 사이 공백은 있어도 없어도 된다. 알아듣지 못한 줄은 말없이 버린다.
 //   "줄 끝 없음" 이어도 마지막 글자 뒤 100 ms 지나면 반영한다.
 //   ★응답 문구가 없다★ — 바꾼 게인은 화면에 나오지 않으니 친 값을 적어 둔다.
@@ -61,7 +68,8 @@
 // ── 출력 (아두이노 → PC) ───────────────────────────────────────────────────────────
 //   50 ms 마다 "<REF> <측정 펄스값> <PWM>" 세 정수만 한 줄. 문구는 없다 — 시리얼 플로터에 세 줄 그래프로 그대로 뜬다.
 //   측정에는 지금 DIR 의 부호를 붙인다 (계측은 방향을 모른다 — REF 가 음수면 측정도 음수로 보인다).
-//   PWM 은 지금 모터에 내고 있는 값이다 (−255 ~ 255, 음수 = 역방향 = DIR HIGH, 'm' 상한으로 자른 뒤). 정지면 0.
+//   PWM 은 지금 모터에 내고 있는 값이다 (−255 ~ 255, 음수 = 역방향 = DIR HIGH, 'm' 상한으로 자른 뒤). 정지면 0
+//     (REF 0 을 보낸 뒤 하강 제한으로 0 까지 내려가는 동안은 그 값이 나온다).
 //     펄스값과 단위가 달라 같은 눈금에서는 높이가 맞지 않는다 — 상한에 붙었는지 · 떨리는지를 보는 용도.
 //   PID 가 꺼져 있으면 (정지 · 손 PWM) REF 는 0 으로 나온다.
 //
@@ -70,7 +78,8 @@
 //   2) Ki · Kd 0 으로 Kp 만 : REF 를 0 ↔ 중간값으로 바꿔 가며 본다. P 만이면 REF 에 못 미친 채 선다 — 정상이다.
 //      출렁이기 시작하는 Kp 를 찾고 그 절반쯤.
 //   3) Ki 를 조금씩 올려 남은 오차를 없앤다.   4) 넘침이 크면 Ki 를 내리거나 Kd 를 아주 조금.
-//   5) 정한 값을 아래 기본값에 적는다.
+//   5) REF 를 크게 낮춰 (예 80 → 30 · 80 → 0) 감속 충격을 본다. 세면 'r' 을 낮추고, 너무 굼뜨면 올린다.
+//   6) 정한 값을 아래 기본값에 적는다.
 //
 // ── 핀 (UNO R4 Minima, pulsetest_interrupt_1112 와 같다) ─────────────────────────────
 //   모터 드라이버 1 : PWM 5 · DIR 6.   엔코더 A 2 · B 3 (외부 인터럽트가 되는 핀).
@@ -101,6 +110,7 @@ float Kp        = 3.0f;     // PWM/펄스
 float Ki        = 30.0f;    // PWM/(펄스·s)
 float Kd        = 0.0f;     // PWM/(펄스/s)
 int   pwm_limit = 255;      // 0 ~ 255
+float pwm_dn_rate = 1000.0f;  // PWM/s — |PWM| 이 줄어드는 빠르기의 상한 (10 ms 에 10). 0 = 제한 없음
 
 // ===================== 엔코더 펄스 카운터 (인터럽트 → loop) =====================
 // 부팅 뒤 누적 에지 수. 되돌리지 않고 차이로 쓴다 — 32 비트 읽기는 Cortex-M4 에서 한 번에 끝나므로
@@ -123,6 +133,7 @@ long  meas      = 0;        // 측정 펄스값 (0 이상)
 long  meas_prev = 0;        // 지난 주기의 측정 (D 항)
 float i_term    = 0.0f;     // I 항 (PWM 단위)
 int   pwm_out   = 0;        // 실제로 낸 PWM (+ / −)
+float out_f     = 0.0f;     // 실제로 낸 PWM (+ / −, 반올림 전) — 하강 제한의 기준
 bool  dir_neg   = false;    // 지금 DIR 이 − 쪽(HIGH)인가
 
 unsigned long ctrl_last_us  = 0;
@@ -139,42 +150,66 @@ void countPulses() {
 }
 
 // ===================== 모터 (+ DIR LOW · − DIR HIGH) =====================
-void setMotor(int v) {
-  v = constrain(v, -pwm_limit, pwm_limit);
-  if (v != 0) dir_neg = (v < 0);              // 0 이면 DIR 은 그대로 둔다 (출력 부호도 그대로)
+void setMotor(float v) {
+  v = constrain(v, (float)-pwm_limit, (float)pwm_limit);
+  out_f = v;
+  int pw = (int)lroundf(v);
+  if (pw != 0) dir_neg = (pw < 0);            // 0 이면 DIR 은 그대로 둔다 (출력 부호도 그대로)
   digitalWrite(PIN_M1_DIR, dir_neg ? HIGH : LOW);
-  analogWrite(PIN_M1_PWM, v < 0 ? -v : v);
-  pwm_out = v;
+  analogWrite(PIN_M1_PWM, pw < 0 ? -pw : pw);
+  pwm_out = pw;
+}
+
+// ===================== 하강 제한 (|PWM| 이 줄 때만) =====================
+// 이번 주기에 지금 방향으로 낼 수 있는 |PWM| 의 아래 한계. 제한이 없거나 거의 서 있으면 0
+float slewFloor() {
+  if (pwm_dn_rate <= 0.0f) return 0.0f;
+  float lo = fabsf(out_f) - pwm_dn_rate * DT_S;
+  return lo > 0.0f ? lo : 0.0f;
+}
+
+// 원하는 PWM(+ / −) → 실제로 낼 PWM. 늘 때는 그대로, 줄 때는 아래 한계까지만.
+// 방향이 바뀌면 옛 방향으로 0 까지 먼저 내려간 뒤에 새 방향으로 낸다.
+float applySlew(float want) {
+  float lo = slewFloor();
+  if (lo <= 0.0f) return want;
+  bool same_dir = (want > 0.0f && out_f > 0.0f) || (want < 0.0f && out_f < 0.0f);
+  if (same_dir && fabsf(want) >= lo) return want;
+  return out_f > 0.0f ? lo : -lo;              // 옛 방향 그대로 아래 한계까지만 내린다
 }
 
 // ===================== PID =====================
 // 크기만 맞춘다 : 0 ~ pwm_limit 을 구해 REF 부호를 붙여 돌려준다
-int pidStep() {
+float pidStep() {
   float lim  = (float)pwm_limit;
   float err  = (float)labs(ref) - (float)meas;
   float rate = (float)(meas - meas_prev) / DT_S;   // 펄스/s
+
+  // 아래 한계 = 하강 제한 (지금 REF 방향으로 돌고 있을 때만, 아니면 0)
+  bool  same_dir = (out_f > 0.0f && ref > 0) || (out_f < 0.0f && ref < 0);
+  float lo = same_dir ? slewFloor() : 0.0f;
+  if (lo > lim) lo = lim;
 
   float p = Kp * err;
   float d = -Kd * rate;
   float i_new = constrain(i_term + Ki * err * DT_S, 0.0f, lim);
 
   float u = p + i_new + d;
-  // 와인드업 방지 : 출력이 상한(위) · 0(아래)에 걸린 쪽으로는 I 를 더 쌓지 않는다
-  bool sat_same_side = (u > lim && err > 0) || (u < 0.0f && err < 0);
+  // 와인드업 방지 : 출력이 상한(위) · 아래 한계에 걸린 쪽으로는 I 를 더 쌓지 않는다
+  bool sat_same_side = (u > lim && err > 0) || (u < lo && err < 0);
   if (!sat_same_side) i_term = i_new;
   else                u = p + i_term + d;
 
-  u = constrain(u, 0.0f, lim);
-  int pwm = (int)lroundf(u);
-  return ref < 0 ? -pwm : pwm;
+  u = constrain(u, 0.0f, lim);                 // 아래 한계는 applySlew 가 건다
+  return ref < 0 ? -u : u;
 }
 
 void controlStep() {
   countPulses();
   switch (mode) {
-    case MODE_PID:  setMotor(pidStep()); break;
-    case MODE_OPEN: setMotor(open_pwm); break;
-    default:        setMotor(0); break;
+    case MODE_PID:  setMotor(applySlew(pidStep())); break;
+    case MODE_OPEN: setMotor((float)open_pwm); break;   // 손 PWM 은 하강 제한 없이 그대로
+    default:        setMotor(applySlew(0.0f)); break;   // 정지 : 하강 제한을 따라 0 까지 ('s' 는 바로 0)
   }
   meas_prev = meas;
 }
@@ -187,12 +222,16 @@ void printTelemetry() {
 }
 
 // ===================== 명령 =====================
-void stopAll() {   // 다음 주기를 기다리지 않고 바로 선다
-  mode = MODE_STOP; ref = 0; open_pwm = 0; i_term = 0.0f; setMotor(0);
+void stopAll() {   // 's' : 다음 주기를 기다리지 않고 하강 제한 없이 바로 PWM 0
+  mode = MODE_STOP; ref = 0; open_pwm = 0; i_term = 0.0f; setMotor(0.0f);
+}
+
+void softStop() {  // REF 0 : PID 를 끄고, PWM 은 controlStep 이 하강 제한을 따라 0 까지 내린다
+  mode = MODE_STOP; ref = 0; open_pwm = 0; i_term = 0.0f;
 }
 
 void setRef(long v) {
-  if (v == 0) { stopAll(); return; }
+  if (v == 0) { softStop(); return; }
   v = constrain(v, -REF_ABS_MAX, REF_ABS_MAX);
   bool flip = (ref != 0) && ((v < 0) != (ref < 0));
   if (mode != MODE_PID || flip) i_term = 0.0f;   // 새로 켜거나 방향이 바뀌면 I 를 지운다
@@ -245,6 +284,7 @@ void handleLine(const char *s) {
                   if (i_term > pwm_limit) i_term = pwm_limit;
                 }
                 break;
+      case 'r': if (v >= 0) pwm_dn_rate = v; break;
       case 'o': if (v >= -PWM_MAX && v <= PWM_MAX) {
                   open_pwm = (int)lroundf(v); mode = MODE_OPEN; ref = 0; i_term = 0.0f;
                 }
