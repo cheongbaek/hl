@@ -14,6 +14,8 @@ PC → 우노   "<목표 펄스> <조향각>"  (dualtest_1118 입력 규격). �
             OFF · 영점 보정 중 · 메가 끊김 · 창 닫기 → "0 0" (주행은 우노의 하강 제한으로 부드럽게 서고 조향은 0° 를 잡는다).
 우노 → PC   "<목표 펄스> <목표 조향각> <실제 펄스> <실제 조향각>" 50 ms 마다 (dualtest 출력).
 PC → 메가   "U,<목표 펄스>,<조향각>" — 우노 출력을 받을 때마다 넘긴다 (메가 LCD 둘째 줄). 정수.
+            ★메가 줄이 0.05 s 안에 왔을 때만 쓴다★ — 메가 2560 부트로더는 바이트가 계속 들어오면 스케치로 넘어가지 않는다
+            (리셋 버튼을 누른 동안 쓰면 LCD 가 흰 블록으로 남고 "J," 줄이 끊긴다. 2026-11-19 broon/joy.py 실물에서 겪음).
             조향각은 기본으로 우노의 '목표' 조향각 — 실제 각을 띄우려면 LCD_ACTUAL_ANGLE = True.
             타이머 · ON/OFF 는 메가 안에서만 돈다 (시리얼로 오가지 않는다).
 
@@ -212,6 +214,7 @@ class Relay:
         self.data = (DEFAULT_CENTER, DEFAULT_CENTER, 1,
                      DEFAULT_CENTER, DEFAULT_CENTER, 1, 1, 1, 0)
         self.joy_lines = 0
+        self.joy_line_t = 0.0        # 메가에서 마지막으로 올바른 줄을 받은 때 (부트로더 보호)
         self.center_x1 = DEFAULT_CENTER
         self.center_y1 = DEFAULT_CENTER
         self.center_x2 = DEFAULT_CENTER
@@ -248,6 +251,8 @@ class Relay:
             if not line:
                 continue
 
+            if line.startswith("J,"):
+                self.joy_line_t = time.monotonic()
             if line == "J,RESET":
                 if self.calib_buf is not None:
                     # 아직 첫 보정 중 (포트를 열어 메가가 리셋된 경우) -> 리셋 뒤 값으로 처음부터 다시
@@ -357,8 +362,8 @@ class Relay:
             self._send_joy(f"U,{fb[0]},{int(round(ang))}\n")
 
     def _send_joy(self, text):
-        if not self.joy_ok:
-            return
+        if not self.joy_ok or time.monotonic() - self.joy_line_t > 0.05:
+            return                          # 메가가 부트로더일 수 있다 — 쓰면 스케치로 못 넘어간다
         with self.joy_lock:
             try:
                 self.joy.write(text.encode("ascii"))

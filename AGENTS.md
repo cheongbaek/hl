@@ -52,6 +52,8 @@ hl_ws/                         ROS 2 워크스페이스 겸 리포 루트
 │   ├── joy.ino                조이스틱 '메가' 2560 (2026-11-18, mad PC 의 joy4.ino 를 고침) — 4 ms(250 Hz)마다 "J,x1,y1,k1,x2,y2,k2,swa,swb,on".
 │   │                            SWA = ON/OFF(켜면 OFF), SWB = 타이머(짧게 시작·일시정지·재개, 1 초 길게 0) — 둘 다 보드 안에서. I2C LCD 16×2(0x27/0x3F)
 │   │                            "00:00:00     OFF" / "REF:+35 -12 00km"(속도계 00 고정). ★라이브러리 "LiquidCrystal I2C"(Frank de Brabander) 필요★
+│   ├── joy_nolcd.ino          joy.ino 에서 LCD 관련(I2C LCD · 'U' 줄 해석 · SWB 타이머)을 모두 뺀 판 (2026-11-19, LCD 교체 전까지).
+│   │                            핀 · 250 Hz · "J,…,on" 줄 · J,RESET · SWA ON/OFF 는 같다 → PC 쪽 그대로. 라이브러리 없음. 컴파일만 했다
 │   ├── arduino_code.ino       white 용 Mega 펌웨어 초안(white_fw) — ★보드에 올린 적 없다★
 │   ├── arduino_code/          UNO R4 Minima 시험 스케치 (2026-11-12) — 모터 1개 PWM 손 입력 + 엔코더 계측
 │   │                            pulsetest_interrupt_1112.ino : 2 · 3번 핀 인터럽트(CHANGE)로 A · B 상 에지 수를 1 s 마다 따로 (11-16 바꿈)
@@ -203,6 +205,9 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
       가상 차량(자전거 모형 + 가짜 GPS)으로만 돌려 봤다 — 판별 0.5 s, SWA OFF 무시 · ON 순간 "0 0" · 스틱 0 이면 0.5 s 뒤 조용,
       잘못된 /cmd_vel 버림, 매핑 → map_421 저장 · 같은 번호 거절, 주행 안테나 ↔ 매핑 궤적 평균 0.16 ~ 0.19 m(환산값을 ±20 % 틀려도),
       /joy318 즉시 IDLE · ON 중 출발 거절, rec_ · route_ 기록. ★실제 메가 · 우노 · GPS 로는 아직 안 돌렸다★.
+      2026-11-19 실물 메가 첫 시험 : '영점 보정 중' 이 안 끝나고 LCD 가 흰 블록 — joy 가 포트를 열자마자(메가 리셋 → 부트로더)
+      LCD 줄(U)을 20 Hz 로 써서 메가 2560 부트로더(stk500v2)가 스케치로 못 넘어갔다. → 메가 줄이 0.05 s 안에 왔을 때만 쓰게 고쳤다
+      (tool/joy.py 도). 리셋 감지(J,RESET) 때 영점은 기다리지 않고 바로 다시 잡는다(사용자 지정). 고친 판은 실물로 다시 확인할 것.
 - [ ] `pulse_per_mps`(1 m/s = 45 펄스) 는 추정 — 곧게 달린 기록의 `gps_kmh` 와 `meas_pulse` 로 맞춘다. 조향 트림 · 게인(지금 중립)도 실차로.
 - [ ] 조향 눈금 : 가변저항 ±21° 가 실제 바퀴각인지 (driving 의 순수추종은 이 값을 바퀴각으로 본다).
 - [ ] 조이스틱 개입 : SWA ON 순간 "0 0" 마무리와 driving 의 마지막 명령이 겹칠 때 차가 곧 서는지(가상에서는 경합 0개).
