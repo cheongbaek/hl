@@ -173,6 +173,13 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
   `/enc_pot` · `/joy318`(Int32 1) · `/joy_port` · `/arduino_status`.
 - 2026-11-11 의 4바이트 바이너리 규약(0xAA · km/h · + 좌)은 버렸다. white2 는 아직 그 시절 토픽(`/cmd_vel_raw`)을 낸다.
 - 리모컨은 ROS 가 판정하지 않는다(2026-11-09 사용자 결정). 조이스틱은 위 `/joy318` 로만 자율주행에 끼어든다.
+- **재연결** (2026-11-23, gold `nxde/arduino.py` 의 `_link_loop` · `_drop_board` 방식) : `broon/arduino` 의 worker 스레드가 처음 찾기와 재연결을 함께 맡는다.
+  구동 우노는 읽기 · 쓰기 예외(USB 빠짐) 때 놓고 3 s 마다 다시 찾는다(같은 이름 · 다른 이름 모두). 끊긴 동안 온 `/cmd_vel` 은 버리고,
+  다시 붙어도 옛 명령을 되보내지 않는다. E-STOP 중이면 붙자마자 `s` · `0 0`. 조이스틱은 arduino 가 3 s 마다 포트 목록만 보고
+  사라지면 `/joy_port` 를 '' 로 → 새 포트를 판별해 다시 알린다. `broon/joy` 는 끊기면 OFF("0 0" 마무리) 뒤 1 s 마다 다시 연다.
+  ★재연결 때 영점은 다시 잡지 않는다★ — 연 뒤 첫 데이터 줄보다 먼저 온 `J,RESET` 은 '포트 열기 리셋'으로 넘기고, 줄이 흐르는 중에 온
+  `J,RESET`(리셋 버튼)만 다시 잡는다. 연 뒤 보드 줄이 오기 전에는 아무것도 내지 않는다(끊기기 전 스틱 · ON 값이 남지 않게).
+  `boards.probe` 는 모든 포트가 가려지면 바로 끝낸다(조이스틱을 이미 알 때 3.5 s 를 다 기다리지 않는다 — 재연결 ~3 s).
 
 ### 원격 E-STOP (2026-11-19 — 정본은 `src/broon/broon/estop.py` 머리말)
 
@@ -217,6 +224,9 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
       boards 가 FTDI 를 후보로 보지 않아 판별 실패 → FTDI 를 조이스틱 전용 후보로 넣었다. 실물 나노 + R4 로 판별(joy=ttyUSB0 · 구동=ttyACM0),
       joy 노드 단독(256 줄/s · J,RESET · 영점)까지 확인. 열고 J,RESET 까지 ~1.7 s 라 '줄이 안 온다' 경고를 2.5 s 로 늦췄다.
       ★arduino 노드와 함께 · SWA ON 발행 · 실차는 아직★.
+      2026-11-23 재연결(위 '아두이노 규약') : 가짜 포트로만 확인 — 우노 뺌 감지 0.01 s, 같은 이름 2.3 s · 다른 이름 2.7 s 에 다시 붙음, 끊긴 동안 명령 버림,
+      다시 붙은 우노가 처음 받은 줄 `s` · `0 0`(E-STOP 중), 조이스틱 포트 사라짐 2.8 s · 새 이름 3.3 s, joy 는 ON · 스틱 민 채 빠져도 "0 0" 만 내고
+      다시 열어 영점 그대로(밀린 스틱이 13 펄스로 계산됨), 리셋 버튼은 다시 잡음. ★실물 USB 뽑기 · 꽂기는 아직★.
 - [ ] `pulse_per_mps`(1 m/s = 45 펄스) 는 추정 — 곧게 달린 기록의 `gps_kmh` 와 `meas_pulse` 로 맞춘다. 조향 트림 · 게인(지금 중립)도 실차로.
 - [ ] 조향 눈금 : 가변저항 ±21° 가 실제 바퀴각인지 (driving 의 순수추종은 이 값을 바퀴각으로 본다).
 - [ ] 조이스틱 개입 : SWA ON 순간 "0 0" 마무리와 driving 의 마지막 명령이 겹칠 때 차가 곧 서는지(가상에서는 경합 0개).
@@ -264,10 +274,15 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - 2026-11-19 : **원격 E-STOP** — broon/estop 이 domichat 방 `domi_fishing_broon`(제한방)을 구독, `STOP` · `GO` · `STATUS` 에 답하고 `/estop`(1 발동 · 0 해제)을 낸다.
   arduino 는 PWM 0 · 조향 0, driving 은 자율주행 종료, record 는 세 방식 모두 기록. 계정 비밀번호는 코드에 넣어도 된다(별도 파일 금지).
   웹 `domiman.duckdns.org/estop`(비밀번호 1234, 상태 문구 3종 · 큰 빨강/초록 버튼, 동시 접속) — xeon 세션 담당.
+- 2026-11-23 : 조이스틱 · 구동 보드가 끊기면 재연결한다(gold 방식). ★재연결 때 영점은 첫 실행 때(또는 마지막 리셋 버튼 때) 잡은 값을 그대로★.
+  hl_ws 에서는 ★broon 패키지만★ 고친다 — 시험용 `tool/` 은 고치지 않는다. 안드로이드 앱(xeon PC `E:\vibe\broon`, 우노 R4 직결)은
+  기본 터치 조종, 조이스틱이 붙으면 조이스틱 조종 — xeon 세션 담당.
 
 ## A7. 관련 저장소 · 세션
 
 - `cheongbaek/gold` — 금색차 자율주행 스택(`white1` · `white2` · `nxde` · `record.py` 의 원형).
+  - ★**2026-11-23 부터 gold_ws 의 정본 기록은 `~/gold_ws/AGENTS.md`**★ — 아래는 11-18 당시 기록이다(그 뒤 자율 상한 3 · 기본 2펄스,
+    X 고속구간 제거, 매핑 CSV 양식 전환, gps_data · ros2bag 정리, 라이다 TODO 는 그쪽에). gold 리포에는 승인 없이 커밋하지 않는다.
   - **이 노트북의 `~/gold_ws`** (2026-11-18) = 그 리포의 `gold_ws/` 를 표준 워크스페이스로 옮긴 것. `src/` 에 white1 · nxde · lidar ·
     mppi_local_planner(main `10b28b7` **그대로**, git 연결 없음 · white2 · white3 · white1_0929 는 뺐다) + ouster-ros **0.13.13**(업스트림 clone).
     GPS·IMU 만 쓴다 — 카메라는 코드를 고치지 않고 `use_camera:=false` 로 끈다(사용자 지정).

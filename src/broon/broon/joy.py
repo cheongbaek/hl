@@ -13,6 +13,13 @@ joy.py ― 조이스틱 보드 → /cmd_vel · /joy318 + 화면 [broon]  (2026-1
 ★포트는 스스로 찾지 않는다★ — arduino 노드가 판별해 /joy_port (래치)로 알려 준 포트를 연다(사용자 지정).
 arduino 노드가 없으면 기다리기만 한다(화면에 '포트 기다리는 중'). 포트를 열면 보드가 리셋되고 "J,RESET" 을 보낸다.
 
+재연결 (2026-11-23 사용자 지정 — gold nxde/joystick.py _reader_loop 방식)
+  · 읽기 예외(USB 빠짐) → 포트를 닫고 SWA 를 OFF 로("0 0" 마무리) → REOPEN_S 마다 같은 포트를 다시 연다.
+    포트 이름이 바뀌어 돌아오면 arduino 노드가 판별해 /joy_port 로 새 포트를 알려 준다.
+  · 다시 붙어도 ★OFF 로 시작한다★ — 보드가 리셋되면 보드의 ON/OFF 도 OFF. 연 뒤 보드 줄이 오기 전에는 아무것도 내지 않는다
+    (끊기기 전 마지막 스틱 · ON 값으로 명령이 나가지 않게).
+  · ★영점은 첫 실행 때(또는 마지막 리셋 버튼 때) 잡은 값을 그대로 쓴다★ — gold 는 재연결마다 다시 잡지만 여기는 사용자 지정으로 유지.
+
 SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11-19 사용자 지정
   ON  = 조이스틱 신호를 보낸다.   OFF = 스틱을 움직여도 무시한다(아무것도 안 낸다).
   ★자율주행 정지는 SWA 가 ON 으로 바뀌는 순간에만★ 일어난다 — 아래 /joy318.
@@ -39,9 +46,12 @@ SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11
 
 스틱 → 값 · 영점 (tool/joy.py 와 같다)
   영점에서 ADC 120 안은 0 (데드존), 그 밖은 1 ~ 최댓값에 직선으로 잇는다.
-  영점 : ★파이썬이 보드에서 받은 값으로 잡는다★ — 연결하면 처음 0.3 s (75 줄)의 중앙값.
+  영점 : ★파이썬이 보드에서 받은 값으로 잡는다★ — 노드를 띄우고 처음 연결하면 처음 0.3 s (75 줄)의 중앙값.
          보드 리셋 버튼 → 부팅 끝에 "J,RESET" → ★받는 즉시 같은 방법(0.3 s 중앙값)으로 다시 잡는다★ (기다리지 않는다 —
          2026-11-19 사용자 지정. 옛 joy_gold · tool/joy.py 는 3 초 뒤 값 한 벌이었다). 보정하는 0.3 s 동안 스틱은 0 으로 본다.
+         ★재연결 때는 다시 잡지 않는다★ (2026-11-23) — 포트를 다시 열면 보드가 리셋돼 "J,RESET" 이 오지만, 영점이 이미 있고
+         그 J,RESET 이 ★연 뒤 첫 데이터 줄보다 먼저★ 왔으면 '포트 열기 리셋'으로 보고 넘긴다. 데이터 줄이 흐르는 중에 온
+         J,RESET 만 리셋 버튼으로 본다.
   보드 줄이 2.5 s 넘게 안 오면 화면 상태 줄에 '보드에서 줄이 안 온다' 를 띄운다(다른 스케치 · 배선).
 ⚠️ joy_nolcd · joy_nano 와 이 노드는 아직 실물로 함께 돌려 보지 않았다.
 """
@@ -144,6 +154,9 @@ class JoyNode(Node):
         self.joy_lines = 0
         self.center = {"x1": DEFAULT_CENTER, "y1": DEFAULT_CENTER, "x2": DEFAULT_CENTER, "y2": DEFAULT_CENTER}
         self.calib_buf = None
+        self.zero_ok = False         # 영점을 한 번이라도 잡았나 — 잡았으면 재연결 때 다시 잡지 않는다 (2026-11-23)
+        self.data_since_open = False # 이번에 연 뒤 보드 데이터 줄을 받았나 (그 전의 J,RESET = 포트 열기 리셋)
+        self.opens = 0               # 포트를 연 횟수 (2 부터 재연결)
         self.line_t = 0.0            # 보드에서 마지막으로 올바른 줄을 받은 때 (monotonic)
         self.status = ("조이스틱 포트 기다리는 중 — arduino 노드가 /joy_port 로 알려 준다", "warn")
 
@@ -196,12 +209,23 @@ class JoyNode(Node):
                 self.stop_evt.wait(REOPEN_S)
                 continue
             with self.lock:
+                self.opens += 1
                 self.line_t = time.monotonic()          # 여는 순간부터 BOARD_SILENT_S 를 센다
-                self.calib_buf = {"x1": [], "y1": [], "x2": [], "y2": []}   # 연결마다 영점을 새로 잡는다
-                self.status = ("영점 보정 중... (보드 리셋 버튼으로 재보정)", "text")
+                self.data_since_open = False            # 보드 줄이 오기 전에는 아무것도 내지 않는다 (_update)
+                self.data = self._neutral()
+                if self.zero_ok:                        # ★재연결 — 영점은 그대로★ (2026-11-23 사용자 지정)
+                    self.calib_buf = None
+                    c = self.center
+                    self.status = (f"재연결 — 영점 유지  L center=({c['x1']},{c['y1']})  "
+                                   f"R center=({c['x2']},{c['y2']})", "ok")
+                else:                                   # 첫 연결(또는 아직 영점을 못 잡았다) — 잡는다
+                    self.calib_buf = {"x1": [], "y1": [], "x2": [], "y2": []}
+                    self.status = ("영점 보정 중... (보드 리셋 버튼으로 재보정)", "text")
+                again, keep = self.opens > 1, self.zero_ok
             with self.ser_lock:
                 self.ser, self.port = ser, dev
-            self.get_logger().info(f"🎮 조이스틱 연결 {dev}")
+            self.get_logger().info(f"🎮 조이스틱 {'재연결' if again else '연결'} {dev}"
+                                   + (" — 영점 유지 (다시 잡지 않는다)" if keep else ""))
             try:
                 self._read_loop(ser, dev)
             except (serial.SerialException, OSError) as e:
@@ -231,18 +255,29 @@ class JoyNode(Node):
                 with self.lock:
                     self.line_t = time.monotonic()
                     if v == 'RESET':
-                        self._on_reset()
+                        if self.zero_ok and not self.data_since_open:
+                            self.get_logger().info("포트를 열어 보드가 리셋됐다(J,RESET) — 영점 유지")
+                        else:
+                            self._on_reset()            # 첫 연결 중 · 리셋 버튼
                     else:
                         self.data = v
+                        self.data_since_open = True
                         self.joy_lines += 1
                         self._step_calibration(v)
                         self._update(time.monotonic())
 
     def _lost(self):
         with self.lock:
-            self.status = ("조이스틱 끊김 — 다시 연결을 기다린다", "bad")
+            self.status = ("조이스틱 끊김 — 다시 연결한다" + (" (영점 유지)" if self.zero_ok else ""), "bad")
+            self.data_since_open = False
+            self.data = self._neutral()          # 끊기기 전 스틱 · ON 값이 남지 않게
             self._set_on(False, time.monotonic())
             self._update(time.monotonic())
+
+    def _neutral(self):
+        """보드 줄이 없을 때의 값 — 스틱은 영점, 버튼은 안 누름, OFF."""
+        c = self.center
+        return (int(round(c["x1"])), int(round(c["y1"])), 1, int(round(c["x2"])), int(round(c["y2"])), 1, 1, 1, 0)
 
     # ── 영점 ─────────────────────────────────────────────────────────────────
     def _on_reset(self):
@@ -260,6 +295,7 @@ class JoyNode(Node):
         if len(self.calib_buf["y1"]) >= CALIBRATION_SAMPLES:
             self.center = {k: statistics.median(v) for k, v in self.calib_buf.items()}
             self.calib_buf = None
+            self.zero_ok = True
             c = self.center
             self.status = (f"보정 완료  L center=({c['x1']},{c['y1']})  R center=({c['x2']},{c['y2']})", "ok")
 
@@ -290,7 +326,7 @@ class JoyNode(Node):
 
     def _update(self, now):
         """메가 한 줄마다 · 주기마다. 스틱 → 명령, 그리고 낼지 말지."""
-        connected = self.ser is not None
+        connected = self.ser is not None and self.data_since_open    # 연 뒤 보드 줄이 와야 '연결'
         if connected:
             self._set_on(bool(self.data[8]), now)
         active = connected and self.on and not self.calibrating()
@@ -342,6 +378,8 @@ class JoyNode(Node):
         """화면 · 콘솔용 한 줄 — 지금 /cmd_vel 을 어떻게 내고 있나."""
         if self.ser is None:
             return "발행 안 함 (조이스틱 미연결)"
+        if not self.data_since_open:
+            return "발행 안 함 — 보드 줄 기다리는 중 (열면 보드가 리셋된다)"
         if not self.on:
             return "발행 안 함 — SWA OFF (스틱 무시)"
         if self.calibrating():

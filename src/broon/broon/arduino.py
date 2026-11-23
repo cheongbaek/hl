@@ -11,9 +11,19 @@ arduino.py ― 아두이노 판별 · 구동 '우노' 브리지 [broon]  (2026-1
 판별 — ★보드 종류와 상관없이★ "J," 줄을 보내는 아두이노 = 조이스틱, ★나머지 아두이노 = 구동계★ (tool/joy.py 와 같다)
   · 조이스틱 포트는 열어서 확인만 하고 ★닫는다★ — /joy_port (래치)로 알리면 joy 노드가 연다.
     (메가는 포트를 열 때마다 리셋된다 — 여기서 한 번, joy 가 열 때 한 번. joy 는 "J,RESET" 을 받고 영점을 다시 잡는다)
-  · 구동 포트는 계속 쥐고 있다. 빠지면 다시 찾는다.
+  · 구동 포트는 계속 쥐고 있다.
   · 처음에 못 찾은 보드는 RESCAN_S 마다 ★새로 나타난 포트만★ 열어 본다 — 이미 조이스틱으로 판별한 포트는
     다시 열지 않는다(joy 가 쓰는 중에 열면 메가가 리셋된다). 포트가 목록에서 사라졌다 다시 생기면 새 포트로 본다.
+
+재연결 (2026-11-23 사용자 지정 — gold nxde/arduino.py 의 _link_loop · _drop_board 방식)
+  · 처음 찾기와 재연결을 worker 스레드 하나가 맡는다. 보드가 없어도 노드는 바로 뜨고, 꽂으면 그때 붙는다.
+  · 구동 우노 : 읽기 · 쓰기 예외(USB 빠짐) → 그 포트만 닫고 놓는다(_drop_drive) → RESCAN_S 마다 다시 찾는다.
+    끊긴 동안 온 /cmd_vel 은 버린다(상태의 '구동 없어 못 보냄'). 다시 붙어도 ★옛 명령을 다시 보내지 않는다★ —
+    joy · driving 이 내는 다음 /cmd_vel 부터 따른다. E-STOP 중에 다시 붙으면 곧바로 's' · '0 0'.
+  · 조이스틱 : 포트를 여는 것은 joy 노드다. 여기서는 RESCAN_S 마다 ★포트 목록만★ 보고(열지 않는다) 조이스틱 포트가
+    사라졌으면 /joy_port 를 '' 로 내리고, 새 포트가 생기면 판별해서 다시 알린다. 같은 이름으로 금방 돌아오면 joy 가
+    스스로 다시 연다. 영점은 joy 노드가 첫 실행 때 잡은 값을 그대로 쓴다(재연결 때 다시 잡지 않는다).
+  · 포트는 열려 있는데 줄만 안 오는 것은 끊김으로 보지 않는다 — 상태에 '응답 없음' 만 띄운다 (gold 와 같다).
   · 포트를 직접 정하려면 -p drive_port:=/dev/ttyACM0 (그러면 그 포트를 판별 없이 구동으로 쓴다) ·
     -p joy_port:=/dev/ttyACM1 (판별 없이 /joy_port 로 알린다).
 
@@ -32,7 +42,7 @@ arduino.py ― 아두이노 판별 · 구동 '우노' 브리지 [broon]  (2026-1
                   (해제했다고 스스로 움직이지는 않는다 — 다음 /cmd_vel 부터 따른다). (2026-11-19 사용자 지정, broon/estop.py)
 
 끝낼 때 우노에 "0 0" 을 한 번 보낸다(구동은 하강 제한을 따라 서고 조향은 0° 로).
-⚠️ 실제 보드 두 대로 함께 돌려 본 적은 아직 없다 — 가짜 시리얼 포트로만 확인했다.
+⚠️ 실제 보드 두 대로 함께 돌려 본 적은 아직 없다 — 가짜 시리얼 포트로만 확인했다 (재연결도 가짜 포트로만, 2026-11-23).
 """
 
 import signal
@@ -50,7 +60,7 @@ import serial
 from broon import boards
 from broon.boards import CMD_TOPIC, ENC_POT_TOPIC, ESTOP_TOPIC, JOY_PORT_TOPIC
 
-RESCAN_S = 3.0               # 못 찾은 보드가 있으면 이 간격으로 새 포트를 열어 본다
+RESCAN_S = 3.0               # 이 간격으로 포트 목록을 보고, 못 찾은 보드가 있으면 새 포트를 열어 본다 (gold DETECT_RETRY_S)
 STATUS_S = 1.0
 DRIVE_STALE_S = 0.5          # 우노 출력이 이만큼 없으면 상태에 '응답 없음'
 ESTOP_RESEND_S = 0.5         # E-STOP 동안 '0 0' 을 다시 보내는 간격
@@ -81,6 +91,7 @@ class ArduinoNode(Node):
         self.last_cmd_t = 0.0
         self.estop = False           # /estop 1 — /cmd_vel 을 막는다
         self.estop_n = 0             # E-STOP 으로 막은 /cmd_vel
+        self.drive_drops = 0         # 구동 우노가 끊긴 횟수 (재연결 횟수)
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.pub_enc = self.create_publisher(Float64MultiArray, ENC_POT_TOPIC, 20)
@@ -131,17 +142,21 @@ class ArduinoNode(Node):
             self.write_line("0 0\n")
 
     def write_line(self, text):
+        err = None
         with self.ser_lock:
-            if self.ser is None:
-                self.nodrive_n += 1
+            ser = self.ser
+            if ser is None:
+                self.nodrive_n += 1           # 끊긴 동안 — 조용히 버린다 (gold 와 같다)
                 return False
             try:
-                self.ser.write(text.encode('ascii'))
+                ser.write(text.encode('ascii'))
             except serial.SerialTimeoutException:
                 return False                  # 이번 것은 건너뛴다 — 다음 명령이 곧 온다
             except (serial.SerialException, OSError) as e:
-                self.get_logger().warning(f"우노 송신 오류: {e}", throttle_duration_sec=2.0)
-                return False
+                err = e
+        if err is not None:
+            self._drop_drive(ser, f"송신 실패: {err}")   # 쓰기 오류 = 포트가 죽었다 → 놓고 다시 찾는다
+            return False
         self.tx_n += 1
         return True
 
@@ -153,27 +168,32 @@ class ArduinoNode(Node):
             self.get_logger().info(f"🎮 조이스틱 = {dev or '없음'}")
 
     def _forget_gone(self):
-        """목록에서 사라진 포트는 다음에 다시 열어 본다 (다시 꽂으면 새 장치다)."""
+        """포트 목록만 본다(열지 않는다). 사라진 포트는 다음에 다시 열어 본다 (다시 꽂으면 새 장치다).
+        조이스틱 포트가 사라졌으면 /joy_port 를 '' 로 — 다시 나타나면 _scan 이 판별해 다시 알린다."""
         present = {d for d, *_ in boards.candidate_ports()}
         self.probed &= present
         if self.joy_dev and self.joy_dev not in present and not self.fixed_joy:
-            self.get_logger().warning(f"조이스틱 포트 {self.joy_dev} 가 사라졌다 — 다시 찾는다")
+            self.get_logger().warning(f"조이스틱 포트 {self.joy_dev} 가 사라졌다 — 다시 꽂으면 판별해 붙인다 (영점은 joy 가 유지)")
             self._set_joy('')
         return present
 
     def worker(self):
-        """구동 · 조이스틱 중 못 찾은 것이 있으면 RESCAN_S 마다 새 포트를 열어 본다. 구동 수신은 따로 도는 스레드."""
+        """처음 찾기와 재연결을 함께 맡는다 (gold _link_loop). RESCAN_S 마다 포트 목록을 보고(사라진 조이스틱 포트를 놓는다),
+        구동 · 조이스틱 중 못 찾은 것이 있으면 새 포트를 열어 본다. 구동 수신은 따로 도는 스레드(_read_drive)."""
         next_scan = 0.0
         while not self.stop_evt.is_set():
-            need = self.ser is None or not self.joy_dev
             now = time.monotonic()
-            if need and now >= next_scan:
+            if now >= next_scan:
                 next_scan = now + RESCAN_S
-                self._scan()
+                try:
+                    present = self._forget_gone()
+                    if self.ser is None or not self.joy_dev:
+                        self._scan(present)
+                except Exception as e:        # 한 번의 오류가 재연결 스레드를 죽이지 않게 (gold 와 같다)
+                    self.get_logger().error(f"포트 찾기 오류(다음에 다시): {e}", throttle_duration_sec=10.0)
             self.stop_evt.wait(0.2)
 
-    def _scan(self):
-        present = self._forget_gone()
+    def _scan(self, present):
         if self.ser is None and self.fixed_drive:
             try:
                 ser = serial.Serial(self.fixed_drive, boards.BAUD, timeout=0.1,
@@ -207,13 +227,19 @@ class ArduinoNode(Node):
         self.rx_n = 0
         with self.ser_lock:
             self.ser = ser
-        self.get_logger().info(f"🚗 구동 우노 연결 {dev}")
+        again = self.drive_drops > 0
+        self.get_logger().info(f"🚗 구동 우노 {'재연결' if again else '연결'} {dev}"
+                               + (f" (끊김 {self.drive_drops}회째 복구)" if again else ""))
         threading.Thread(target=self._read_drive, args=(ser,), daemon=True).start()
+        if self.estop:                        # E-STOP 중에 다시 붙었다 — 우노는 막 켜졌을 수도 있으니 곧바로 세운다
+            self.write_line("s\n")
+            self.write_line("0 0\n")
 
     def _read_drive(self, ser):
         buf = b""
+        reason = "수신 스레드 끝"
         try:
-            while not self.stop_evt.is_set():
+            while not self.stop_evt.is_set() and self.ser is ser:
                 data = ser.read(ser.in_waiting or 1)
                 if not data:
                     continue
@@ -225,27 +251,38 @@ class ArduinoNode(Node):
                         continue
                     self.rx_n += 1
                     self.rx_t = time.time()
-                    self.last_fb = fb
+                    self.last_fb = fb             # ★끊겨도 지우지 않는다★ (gold 와 같다 — 상태는 '구동 미연결' 로 알린다)
                     self.pub_enc.publish(Float64MultiArray(data=[float(v) for v in fb]))
-        except (serial.SerialException, OSError) as e:
-            self.get_logger().error(f"구동 우노 단절 {self.drive_dev}: {e} — 다시 찾는다")
+        except (serial.SerialException, OSError, TypeError, AttributeError) as e:
+            reason = f"수신 실패: {e}"          # TypeError · AttributeError = 다른 스레드가 포트를 닫은 순간의 read
         finally:
-            with self.ser_lock:
-                self.ser = None
-            boards.close_quietly(ser)
-            self.probed.discard(self.drive_dev)
-            self.drive_dev = ''
+            if not self.stop_evt.is_set():
+                self._drop_drive(ser, reason)
+
+    def _drop_drive(self, ser, reason):
+        """끊긴 구동 포트를 닫고 놓는다 → worker 가 RESCAN_S 마다 다시 찾는다 (gold _drop_board).
+        읽기 · 쓰기 스레드가 함께 불러도 ★지금 쥔 포트일 때 한 번만★ 처리한다."""
+        with self.ser_lock:
+            if self.ser is not ser:
+                return
+            self.ser = None
+        dev, self.drive_dev = self.drive_dev, ''
+        self.probed.discard(dev)              # 같은 이름으로 돌아와도 다시 열어 본다
+        self.drive_drops += 1
+        boards.close_quietly(ser)
+        self.get_logger().error(f"구동 우노 단절 {dev}: {reason} → 재연결 시도 ({RESCAN_S:.0f}s 마다 찾는다)")
 
     # ── 상태 ─────────────────────────────────────────────────────────────────
     def publish_status(self):
         now = time.time()
         if self.ser is None:
-            drv = "구동 미연결"
+            drv = "구동 미연결" + (f" (끊김 {self.drive_drops}회 — 다시 찾는 중)" if self.drive_drops else "")
         elif self.rx_n == 0 or now - self.rx_t > DRIVE_STALE_S:
             drv = f"구동 {self.drive_dev} (응답 없음)"
         else:
             r, a, m, ma = self.last_fb
-            drv = f"구동 {self.drive_dev} 받은 {r:+d} {a:+d}° · 실측 {m:+d} {ma:+.1f}°"
+            drv = (f"구동 {self.drive_dev} 받은 {r:+d} {a:+d}° · 실측 {m:+d} {ma:+.1f}°"
+                   + (f" (재연결 {self.drive_drops}회)" if self.drive_drops else ""))
         cmd = (f"마지막 명령 {self.last_cmd[0]:+d} {self.last_cmd[1]:+d}° ({now - self.last_cmd_t:.1f}s 전)"
                if self.last_cmd else "명령 없음")
         s = (("🛑 E-STOP 중 | " if self.estop else "")

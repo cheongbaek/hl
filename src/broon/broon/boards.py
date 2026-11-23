@@ -119,6 +119,7 @@ def probe(devices, window_s=DETECT_WINDOW_S, keep_drive=True, stop=None):
     "J," 를 보낸 포트가 여럿이면 처음 것만 조이스틱이고 나머지는 버린다(닫는다).
     JOY_ONLY_VIDS(FTDI) 포트는 조이스틱이 아니면 구동 · extra 에도 넣지 않는다.
     stop 이 주어지면(threading.Event) 켜지는 즉시 그만둔다.
+    모든 포트가 줄을 보내 가려지면 window_s 전이라도 끝낸다 (2026-11-23 — 재연결 때 조이스틱을 이미 알면 기다릴 것이 없다).
     """
     joy_only = {p.device for p in list_ports.comports() if p.vid in JOY_ONLY_VIDS}
     sers, busy = {}, {}
@@ -131,6 +132,7 @@ def probe(devices, window_s=DETECT_WINDOW_S, keep_drive=True, stop=None):
     lines = {d: [] for d in sers}
     joy = ''
     talked = set()                       # "J," 가 아닌 줄을 보낸 포트
+    jsent = set()                        # "J," 줄을 보낸 포트
     deadline = time.monotonic() + window_s
     while sers and time.monotonic() < deadline:
         if stop is not None and stop.is_set():
@@ -151,13 +153,13 @@ def probe(devices, window_s=DETECT_WINDOW_S, keep_drive=True, stop=None):
                 if len(lines[dev]) < 5:
                     lines[dev].append(text)
                 if text.startswith(JOY_PREFIX):
+                    jsent.add(dev)
                     if not joy:
                         joy = dev
                 elif dev != joy:
                     talked.add(dev)
-        others = [d for d in sers if d != joy]
-        if joy and all(d in talked for d in others):
-            break                        # 다 가렸다
+        if all(d in talked or d in jsent for d in sers):
+            break                        # 다 가렸다 — 조이스틱이 없어도(이미 알거나 안 꽂았으면) 창을 다 기다리지 않는다
         time.sleep(0.01)
 
     others = sorted((d for d in sers if d != joy and d not in joy_only
