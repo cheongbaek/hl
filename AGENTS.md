@@ -180,6 +180,21 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
   ★재연결 때 영점은 다시 잡지 않는다★ — 연 뒤 첫 데이터 줄보다 먼저 온 `J,RESET` 은 '포트 열기 리셋'으로 넘기고, 줄이 흐르는 중에 온
   `J,RESET`(리셋 버튼)만 다시 잡는다. 연 뒤 보드 줄이 오기 전에는 아무것도 내지 않는다(끊기기 전 스틱 · ON 값이 남지 않게).
   `boards.probe` 는 모든 포트가 가려지면 바로 끝낸다(조이스틱을 이미 알 때 3.5 s 를 다 기다리지 않는다 — 재연결 ~3 s).
+- **휴대폰 무선 조종** (2026-11-23 — 정본은 `src/broon/broon/wireless.py` 머리말) : ★`broon/joy` 가 켜지면 곧바로★
+  Wi-Fi 핫스팟 `BRN-hl-l1QLctI38mzu`(WPA2-PSK CCMP, 비밀번호는 코드에 — 사용자 지정)를 만들고 ★joy 가 끝나면 내린다★
+  (인자 `hotspot` · launch `use_hotspot`, 기본 true — 사용자 지정). 도중에 내려가면 다시 만든다. false 면 만들지 않고, 지난번에 남은 것은 내린다.
+  ★켜진 동안 이 PC 의 Wi-Fi 접속은 끊긴다★ — 무선칩(wlo1)을 핫스팟 전용으로 쓴다(NetworkManager AP · 공유 10.42.0.1/24,
+  5 GHz 36 → 149 → 2.4 GHz 6). 인터넷 · 원격 E-STOP 은 유선 · 테더링으로 받는다. 내리면 원래 Wi-Fi 에 다시 붙는다 (2026-11-23 사용자 지정).
+  처음 설계(같은 AX211 에 가상 AP `broonap0` 를 더 — Wi-Fi 와 동시)는 2026-11-23 실기에서 실패했다 : NetworkManager · wpa_supplicant 가
+  새 인터페이스를 managed 로 올리는데 AX211 은 managed 1 개만 허락(EBUSY). 동시에 하려면 hostapd 가 필요하다 — 하지 않았다.
+  root 가 필요해 도우미 `src/broon/hotspot/broon-ap` 를 `sudo -n` 으로 부른다 — ★처음 한 번(도우미를 고칠 때마다)
+  `sudo bash ~/hl_ws/src/broon/hotspot/setup_hotspot.sh`★ (iw 설치 · /usr/local/sbin/broon-ap · sudoers 한 줄 · ufw 허용).
+  휴대폰 앱 → `10.42.0.1:47318` UDP `BRN1,seq,on,pulse,steer`(25 Hz, 0.3 s 끊기면 정지) / 답 `BRN1S,seq,state,estop,되먹임 4`.
+  ★우선순위 실물 조이스틱 > 휴대폰★(실물 줄이 1 s 안에 오면 휴대폰 버림), 휴대폰 ON = SWA ON(`/joy318`), 넘어오면 OFF 를 한 번 받아야 ON(ARM).
+  joy 창 : 휴대폰이 조종하는 동안 휴대폰이 보낸 값을 패드에 보라색으로 그린다(L 세로 = 펄스, R 가로 = 조향). 창 크기는 처음 배치로 고정하고
+  정보는 짧은 줄로 나눴다(/cmd_vel · /joy318 · /enc_pot · 핫스팟 · 휴대폰 · 상태) — 글자 길이로 창이 움직이지 않게 (2026-11-23 사용자 지적).
+  끄기 `use_hotspot:=false`(broon.launch) · `-p hotspot:=false`. ⚠️ white1 `one.launch.py` 의 joy 는 이 인자를 넘기지 않아 기본(true) —
+  white1 을 띄워도 핫스팟이 생기고 Wi-Fi 접속이 끊긴다(broon 패키지만 고친다는 결정이라 white1 은 그대로 뒀다).
 
 ### 원격 E-STOP (2026-11-19 — 정본은 `src/broon/broon/estop.py` 머리말)
 
@@ -227,6 +242,12 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
       2026-11-23 재연결(위 '아두이노 규약') : 가짜 포트로만 확인 — 우노 뺌 감지 0.01 s, 같은 이름 2.3 s · 다른 이름 2.7 s 에 다시 붙음, 끊긴 동안 명령 버림,
       다시 붙은 우노가 처음 받은 줄 `s` · `0 0`(E-STOP 중), 조이스틱 포트 사라짐 2.8 s · 새 이름 3.3 s, joy 는 ON · 스틱 민 채 빠져도 "0 0" 만 내고
       다시 열어 영점 그대로(밀린 스틱이 13 펄스로 계산됨), 리셋 버튼은 다시 잡음. ★실물 USB 뽑기 · 꽂기는 아직★.
+- [ ] **휴대폰 무선 조종(2026-11-23)** : 확인한 것 — setup_hotspot.sh 설치, 도우미로 손으로 켠 핫스팟(wlo1 · 5 GHz 36ch)에
+      앱 v1.3(S25 Ultra)이 붙어 DHCP 10.42.0.228 · UDP "BRN1" 25.0 Hz 빠짐 0 · 최대 간격 97 ms, 그동안 유선 테더링 인터넷 정상.
+      joy 와 함께 : 사용자가 직접 시험해 ★값 송수신 정상★ (2026-11-23, 구동 우노 없이). 남은 것 — 실물 조이스틱을 꽂으면 JOY 로 바뀌는지 ·
+      앱을 끄면 0.3 s 안에 서는지 · joy 를 끝내면(Ctrl-C · launch 종료) 핫스팟이 내려가고 Wi-Fi 가 다시 붙는지 · 우노를 붙여 실제로 움직이는지 ·
+      joy 창의 휴대폰 값 표시 · 고정 크기(같은 날 고침, 아직 안 봄). 대회장에서 PC 인터넷 · 원격 E-STOP 을 무엇으로 받는지 정할 것
+      (핫스팟이 무선칩을 쓰므로 USB 테더링 · LTE · 유선). 이 PC 에서 agent 는 ROS 실행 시험을 하지 않는다(사용자 지정).
 - [ ] `pulse_per_mps`(1 m/s = 45 펄스) 는 추정 — 곧게 달린 기록의 `gps_kmh` 와 `meas_pulse` 로 맞춘다. 조향 트림 · 게인(지금 중립)도 실차로.
 - [ ] 조향 눈금 : 가변저항 ±21° 가 실제 바퀴각인지 (driving 의 순수추종은 이 값을 바퀴각으로 본다).
 - [ ] 조이스틱 개입 : SWA ON 순간 "0 0" 마무리와 driving 의 마지막 명령이 겹칠 때 차가 곧 서는지(가상에서는 경합 0개).
@@ -277,6 +298,12 @@ ros2 launch white  one_launch.py        #                      ros2 run white  p
 - 2026-11-23 : 조이스틱 · 구동 보드가 끊기면 재연결한다(gold 방식). ★재연결 때 영점은 첫 실행 때(또는 마지막 리셋 버튼 때) 잡은 값을 그대로★.
   hl_ws 에서는 ★broon 패키지만★ 고친다 — 시험용 `tool/` 은 고치지 않는다. 안드로이드 앱(xeon PC `E:\vibe\broon`, 우노 R4 직결)은
   기본 터치 조종, 조이스틱이 붙으면 조이스틱 조종 — xeon 세션 담당.
+- 2026-11-23 : **휴대폰 무선 조종** — 실물 조이스틱 > 휴대폰, joy 가 실물을 5 s 못 찾으면 핫스팟(복잡한 SSID, 이 PC 무선칩이 되는 규격 —
+  휴대폰은 Galaxy S25 Ultra · Android 17). 비밀번호는 파이썬 코드에(공개 리포에 보인다 — 사용자가 알고 정함), 실물이 다시 붙어도 핫스팟 유지,
+  휴대폰 ON 은 SWA ON 과 같다(/joy318). 이 PC 에서는 ★코드 수정 · 문법 검사 · 빌드까지만, 실행 시험은 하지 않는다★(시험은 사용자가).
+  앱(v1.3, Wi-Fi 단추 → SSID 를 찾아 붙기)은 xeon 세션 담당.
+- 2026-11-23 (같은 날 실기 뒤 바꿈) : ★핫스팟은 joy 가 켜질 때 만들고 끝날 때 내린다(조이스틱 5 s 조건 폐기), true/false 인자 · 기본 true★.
+  Wi-Fi 접속과 동시가 안 되면 핫스팟 동안 Wi-Fi 접속을 끊는다(인터넷은 테더링) — 실기에서 동시가 안 돼 그렇게 했다.
 
 ## A7. 관련 저장소 · 세션
 

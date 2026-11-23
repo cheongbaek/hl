@@ -20,12 +20,24 @@ arduino 노드가 없으면 기다리기만 한다(화면에 '포트 기다리�
     (끊기기 전 마지막 스틱 · ON 값으로 명령이 나가지 않게).
   · ★영점은 첫 실행 때(또는 마지막 리셋 버튼 때) 잡은 값을 그대로 쓴다★ — gold 는 재연결마다 다시 잡지만 여기는 사용자 지정으로 유지.
 
+휴대폰 무선 조종 (2026-11-23 사용자 지정 — 정본 broon/wireless.py 머리말) ⚠️ joy 노드와 함께는 아직 돌려 보지 않았다
+  · ★joy 가 켜지면 곧바로 이 PC 에 Wi-Fi 핫스팟(wireless.AP_SSID, WPA2)을 만들고, joy 가 끝나면 내린다★ — 인자 hotspot(기본 true).
+    켜진 동안 이 PC 의 Wi-Fi 접속은 끊긴다(무선칩을 핫스팟 전용으로 — 인터넷은 유선 · 테더링). 도중에 내려가면 다시 만든다.
+    root 가 필요해 도우미 broon-ap 를 sudo -n 으로 부른다 — ★처음 한 번★ sudo bash ~/hl_ws/src/broon/hotspot/setup_hotspot.sh
+  · 휴대폰 broon 앱이 그 Wi-Fi 에 붙어 10.42.0.1:47318 로 UDP "BRN1,seq,on,pulse,steer" 를 25 Hz 로 보낸다.
+  · ★우선순위 : 실물 조이스틱 > 휴대폰★ — 실물 조이스틱 줄이 오는 동안(JOY_LIVE_S) 휴대폰 명령은 버린다(답 state=JOY).
+  · 휴대폰 ON = SWA ON 과 똑같다 — 같은 발행 규칙(0 이 아니면 내고, 0 이면 마무리 뒤 조용) · /joy318.
+  · 휴대폰이 처음 붙거나 실물 조이스틱에서 넘어오면 on=0 을 한 번 받아야 ON 을 받는다(ARM) — ON 인 채로 넘어와 갑자기 가지 않게.
+  · 휴대폰 줄이 PHONE_TIMEOUT_S(0.3 s) 동안 없으면 끊긴 것 — OFF 와 같다("0 0" 마무리).
+  · 끄기 : -p hotspot:=false (broon.launch.py 는 use_hotspot:=false). 그러면 핫스팟도 UDP 도 없다 —
+    지난번 joy 가 강제로 끝나(SIGKILL 등) 핫스팟이 남아 있으면 그것도 내린다.
+
 SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11-19 사용자 지정
   ON  = 조이스틱 신호를 보낸다.   OFF = 스틱을 움직여도 무시한다(아무것도 안 낸다).
   ★자율주행 정지는 SWA 가 ON 으로 바뀌는 순간에만★ 일어난다 — 아래 /joy318.
 
 발행
-  /cmd_vel (std_msgs/Int32MultiArray) data = [목표 펄스, 목표 조향각]  — SWA ON 일 때만
+  /cmd_vel (std_msgs/Int32MultiArray) data = [목표 펄스, 목표 조향각]  — SWA ON(또는 휴대폰 ON) 일 때만
       L 스틱 세로 → 펄스 : 위 + (전진) · 아래 − (후진), 최대 ±92.   R 스틱 가로 → 조향 : 왼쪽 − · 오른쪽 +, 최대 ±21°.
       ★스틱이 0 이 아니면★ 값이 바뀌는 즉시 + 그대로여도 RESEND_S 마다 보낸다 (메가 250 Hz 줄마다 다시 계산).
       ★스틱이 0 으로 돌아오면★ "0 0" 을 ZERO_TAIL_S 동안 RESEND_S 마다 보낸 뒤 ★조용해진다★ —
@@ -34,7 +46,7 @@ SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11
       SWA 가 바뀔 때(ON ↔ OFF) · 메가 끊김 · 노드 종료 때도 "0 0" 마무리를 보낸다 — ON 으로 바꾼 순간
         자율주행이 마지막으로 보낸 속도로 차가 계속 가지 않게(그러면 우노 시한 2 초까지 간다).
       영점 보정 중에는 스틱을 0 으로 본다.
-  /joy318 (std_msgs/Int32, 늘 1) — ★SWA ON 동안★ JOY318_S 마다(ON 으로 바뀌는 순간 곧바로 한 번).
+  /joy318 (std_msgs/Int32, 늘 1) — ★SWA ON(또는 휴대폰 ON) 동안★ JOY318_S 마다(ON 으로 바뀌는 순간 곧바로 한 번).
       white1 driving 은 이것을 들으면 자율주행을 멈추고 /cmd_vel 발행을 그친다. ON 인 동안은 자율주행 출발을 거절한다
       → 자율주행은 SWA OFF 에서만 돌고, 조이스틱이 자율을 멈추는 때는 ON 으로 바꾸는 순간뿐이다.
 
@@ -53,6 +65,7 @@ SWA (ON/OFF — 조이스틱 보드 안에서 바뀐다. 켜면 OFF) — 2026-11
          그 J,RESET 이 ★연 뒤 첫 데이터 줄보다 먼저★ 왔으면 '포트 열기 리셋'으로 보고 넘긴다. 데이터 줄이 흐르는 중에 온
          J,RESET 만 리셋 버튼으로 본다.
   보드 줄이 2.5 s 넘게 안 오면 화면 상태 줄에 '보드에서 줄이 안 온다' 를 띄운다(다른 스케치 · 배선).
+  보드 줄이 JOY_LIVE_S(1 s) 넘게 안 오면 실물 조이스틱이 없는 것으로 본다 — OFF("0 0" 마무리), 휴대폰이 있으면 휴대폰 차례.
 ⚠️ joy_nolcd · joy_nano 와 이 노드는 아직 실물로 함께 돌려 보지 않았다.
 """
 
@@ -71,7 +84,7 @@ from std_msgs.msg import Float64MultiArray, Int32, Int32MultiArray, String
 
 import serial
 
-from broon import boards
+from broon import boards, wireless
 from broon.boards import CMD_TOPIC, ENC_POT_TOPIC, ESTOP_TOPIC, JOY318_TOPIC, JOY_PORT_TOPIC
 
 RESEND_S = 0.1               # 스틱이 그대로여도 이 간격으로 /cmd_vel 을 다시 낸다
@@ -86,6 +99,7 @@ DEADZONE_RAW = 120
 DEFAULT_CENTER = ADC_MAX // 2
 FB_STALE_S = 0.5             # /enc_pot 이 이만큼 없으면 화면에 '---'
 REOPEN_S = 1.0
+JOY_LIVE_S = 1.0             # 보드 줄이 이만큼 안 오면 실물 조이스틱이 없는 것 (휴대폰 차례 · 핫스팟 5 s 를 센다)
 
 GUI_HZ = 60
 PAD = 260
@@ -96,6 +110,7 @@ BG = "#1e1e1e"
 PAD_BG = "#2b2b2b"
 LINE = "#4a4a4a"
 DOT_COLOR = "#4fc3f7"
+PHONE_COLOR = "#ce93d8"      # 휴대폰이 조종하는 동안 패드 점 · 선 (실물 조이스틱 파랑과 가른다)
 PRESS_COLOR = "#ef5350"
 IDLE_COLOR = "#3a3a3a"
 OK_COLOR = "#66bb6a"
@@ -140,7 +155,9 @@ class JoyNode(Node):
     def __init__(self):
         super().__init__('joy')
         self.declare_parameter('port', '')
+        self.declare_parameter('hotspot', True)        # 휴대폰 무선 조종 (핫스팟 + UDP) — 켜지면 만들고 끝나면 내린다
         self.fixed_port = str(self.get_parameter('port').value)
+        self.use_hotspot = bool(self.get_parameter('hotspot').value)
 
         self.lock = threading.Lock()
         self.stop_evt = threading.Event()
@@ -173,6 +190,20 @@ class JoyNode(Node):
         self.fb_t = 0.0
         self.estop = False           # /estop 1 — arduino 가 /cmd_vel 을 막는다 (화면에 알리기만)
 
+        self.source = None           # 지금 조종하는 쪽 — 'joy'(실물, 우선) · 'phone' · None
+        self.phone_addr = None       # 휴대폰 (ip, port)
+        self.phone_t = 0.0           # 휴대폰 줄을 마지막으로 받은 때
+        self.phone_seq = -1
+        self.phone_on = False
+        self.phone_cmd = (0, 0)
+        self.phone_armed = False     # on=0 을 받았나 — 받아야 ON 을 받는다 (ARM)
+        self.phone_n = 0
+        self.phone_links = 0
+        self.hotspot = (wireless.Hotspot(self.get_logger().info, self.get_logger().warning)
+                        if self.use_hotspot else None)
+        self.udp = (wireless.UdpLink(self.on_phone_line, self.stop_evt, self.get_logger().info,
+                                     self.get_logger().warning) if self.use_hotspot else None)
+
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.pub_cmd = self.create_publisher(Int32MultiArray, CMD_TOPIC, 50)
         self.pub_318 = self.create_publisher(Int32, JOY318_TOPIC, 10)
@@ -181,10 +212,20 @@ class JoyNode(Node):
         self.create_subscription(Int32, ESTOP_TOPIC, lambda m: setattr(self, 'estop', int(m.data) == 1), latched)
         self.create_timer(TICK_S, self.tick)
         threading.Thread(target=self.serial_worker, daemon=True).start()
+        if self.udp is not None:
+            self.udp.start()
         self.get_logger().info(
             f"🎮 joy — 포트 {self.fixed_port or '/joy_port 대기'} | SWA ON 일 때만 {CMD_TOPIC} "
             f"[펄스 ±{boards.PULSE_MAX}, 조향 ±{boards.STEER_MAX}] (스틱 0 이면 '0 0' {ZERO_TAIL_S}s 뒤 조용) · "
             f"ON 동안 {JOY318_TOPIC}")
+        if self.hotspot is not None:
+            self.get_logger().info(
+                f"📶 휴대폰 무선 조종 — 핫스팟 {wireless.AP_SSID} 을 만든다 (joy 가 끝나면 내린다 · 켜진 동안 이 PC 의 "
+                f"Wi-Fi 접속은 끊긴다) → UDP {wireless.AP_IP}:{wireless.UDP_PORT} (우선순위 실물 > 휴대폰)")
+            self.hotspot.request_up(time.monotonic())     # 스레드에서 올린다 (최대 wireless.UP_TIMEOUT_S)
+        else:
+            self.get_logger().info("📶 휴대폰 무선 조종 꺼짐 (hotspot:=false)")
+            wireless.clear_stale(self.get_logger().info, self.get_logger().warning)
 
     # ── 포트 ─────────────────────────────────────────────────────────────────
     def cb_port(self, msg: String):
@@ -271,8 +312,7 @@ class JoyNode(Node):
             self.status = ("조이스틱 끊김 — 다시 연결한다" + (" (영점 유지)" if self.zero_ok else ""), "bad")
             self.data_since_open = False
             self.data = self._neutral()          # 끊기기 전 스틱 · ON 값이 남지 않게
-            self._set_on(False, time.monotonic())
-            self._update(time.monotonic())
+            self._update(time.monotonic())       # 실물이 없으니 OFF("0 0" 마무리) — 휴대폰이 있으면 휴대폰 차례(ARM 부터)
 
     def _neutral(self):
         """보드 줄이 없을 때의 값 — 스틱은 영점, 버튼은 안 누름, OFF."""
@@ -310,11 +350,24 @@ class JoyNode(Node):
         return self.status
 
     # ── 발행 규칙 (self.lock 안에서 부른다) ─────────────────────────────────────
+    def _joy_live(self, now):
+        """실물 조이스틱 줄이 오고 있나 (연 뒤 데이터 줄을 받았고, 마지막 줄이 JOY_LIVE_S 안)."""
+        return self.ser is not None and self.data_since_open and now - self.line_t <= JOY_LIVE_S
+
+    def _source(self, now):
+        """지금 조종하는 쪽 — 'joy'(실물 조이스틱, ★우선★) · 'phone'(휴대폰 무선) · None."""
+        if self._joy_live(now):
+            return 'joy'
+        if self.phone_addr is not None and now - self.phone_t <= wireless.PHONE_TIMEOUT_S:
+            return 'phone'
+        return None
+
     def _set_on(self, on, now):
         if on == self.on:
             return
         self.on = on
-        self.get_logger().info(f"SWA {'ON — 조이스틱 신호를 보낸다 · /joy318' if on else 'OFF — 스틱 무시'}")
+        who = {'joy': 'SWA', 'phone': '휴대폰'}.get(self.source, '조종하는 쪽 없음')
+        self.get_logger().info(f"{who} ON — 신호를 보낸다 · /joy318" if on else f"OFF ({who}) — 스틱 무시")
         self._start_tail(now)                # 바뀔 때마다 "0 0" 마무리 (스틱이 0 이 아니면 _update 가 덮는다)
         if on:
             self._publish_318(now)
@@ -325,12 +378,32 @@ class JoyNode(Node):
         self._publish((0, 0), now)
 
     def _update(self, now):
-        """메가 한 줄마다 · 주기마다. 스틱 → 명령, 그리고 낼지 말지."""
-        connected = self.ser is not None and self.data_since_open    # 연 뒤 보드 줄이 와야 '연결'
-        if connected:
-            self._set_on(bool(self.data[8]), now)
-        active = connected and self.on and not self.calibrating()
-        cmd = stick_to_command(self.data[1], self.data[3], self.center["y1"], self.center["x2"]) if active else (0, 0)
+        """보드 한 줄마다 · 휴대폰 한 줄마다 · 주기마다. 누가 조종하나 → 명령, 그리고 낼지 말지."""
+        src = self._source(now)
+        if src != self.source:
+            if self.source == 'phone' and src == 'joy':
+                self.get_logger().warning("실물 조이스틱이 붙었다 — 휴대폰 명령은 버린다 (우선순위 실물 > 휴대폰)")
+            elif self.source == 'phone' and src is None:
+                self.get_logger().warning(f"휴대폰 줄이 {wireless.PHONE_TIMEOUT_S}s 넘게 없다 — 끊긴 것으로 본다")
+            elif src == 'phone':
+                self.get_logger().info("휴대폰 차례 — 앱이 OFF 를 한 번 보내야 ON 을 받는다" if not self.phone_armed
+                                       else "휴대폰 차례")
+            self.source = src
+        if src != 'phone':
+            self.phone_armed = False         # 휴대폰 차례가 아니면 다시 ARM 부터 (ON 인 채로 넘어와 갑자기 가지 않게)
+        if src == 'joy':
+            on = bool(self.data[8])
+        elif src == 'phone':
+            on = self.phone_armed and self.phone_on
+        else:
+            on = False
+        self._set_on(on, now)
+        if not on or (src == 'joy' and self.calibrating()):
+            cmd = (0, 0)
+        elif src == 'joy':
+            cmd = stick_to_command(self.data[1], self.data[3], self.center["y1"], self.center["x2"])
+        else:
+            cmd = self.phone_cmd
         self.cmd = cmd
         if cmd != (0, 0):
             if not self.engaged or cmd != self.last_pub or now - self.pub_t >= RESEND_S:
@@ -361,8 +434,76 @@ class JoyNode(Node):
         now = time.monotonic()
         with self.lock:
             self._update(now)
-            if self.on and self.ser is not None and now - self.joy318_t >= JOY318_S:
+            if self.on and now - self.joy318_t >= JOY318_S:
                 self._publish_318(now)
+        hs = self.hotspot
+        if hs is None:
+            return
+        # 켜져 있거나 만드는 중이면 아무것도 안 한다. 실패했거나(RETRY_S 뒤) 도중에 내려갔으면 다시 만든다
+        if hs.request_up(now):
+            self.get_logger().info(f"📶 핫스팟을 다시 만든다 ({wireless.AP_SSID})")
+        hs.maybe_check(now)
+
+    # ── 휴대폰 (UDP 스레드가 부른다) ───────────────────────────────────────────
+    def on_phone_line(self, text, addr):
+        """휴대폰 한 줄 → 답할 줄 (None 이면 답하지 않는다)."""
+        pkt = wireless.parse_phone(text, boards.PULSE_MAX, boards.STEER_MAX)
+        if pkt is None:
+            self.udp.bad_n += 1
+            return None
+        seq, on, pulse, steer = pkt
+        now = time.monotonic()
+        with self.lock:
+            fresh = self.phone_addr is not None and now - self.phone_t <= wireless.PHONE_HOLD_S
+            if fresh and addr[0] != self.phone_addr[0]:
+                return wireless.format_reply(seq, 'BUSY', self.estop, self._fb_now())   # 다른 휴대폰이 쥐고 있다
+            alive = self.phone_addr is not None and addr == self.phone_addr and now - self.phone_t <= wireless.PHONE_TIMEOUT_S
+            if alive and seq <= self.phone_seq:
+                return None                  # 뒤바뀐 · 겹친 데이터그램
+            if not alive:
+                self.phone_links += 1
+                self.get_logger().info(f"📱 휴대폰 연결 {addr[0]}:{addr[1]} (seq {seq})")
+            self.phone_addr, self.phone_t, self.phone_seq = addr, now, seq
+            self.phone_on, self.phone_cmd = bool(on), (pulse, steer)
+            self.phone_n += 1
+            if not on and self._source(now) == 'phone':
+                self.phone_armed = True      # OFF 를 받았다 — 이제 ON 을 받는다
+            self._update(now)
+            return wireless.format_reply(seq, self._phone_state(), self.estop, self._fb_now())
+
+    def _phone_state(self):
+        if self.source == 'joy':
+            return 'JOY'
+        if self.source == 'phone' and not self.phone_armed:
+            return 'ARM'
+        return 'ACTIVE' if (self.source == 'phone' and self.on) else 'READY'
+
+    def _fb_now(self):
+        return self.fb if self.fb_fresh() else None
+
+    def describe_hotspot(self):
+        """화면 · 콘솔용 — 핫스팟 (짧게: 창 한 줄에 들어가게)."""
+        hs = self.hotspot
+        if hs is None:
+            return "📶 휴대폰 무선 조종 꺼짐 (hotspot:=false)"
+        state, detail = hs.describe()
+        return f"📶 핫스팟 {detail or state}"
+
+    def describe_phone_link(self):
+        """화면 · 콘솔용 — 휴대폰 (주소 · 상태 · 받은 값). 무선 조종이 꺼져 있으면 ''."""
+        if self.hotspot is None:
+            return ""
+        now = time.monotonic()
+        if self.phone_addr is None or now - self.phone_t > wireless.PHONE_HOLD_S:
+            return "📱 휴대폰 없음"
+        age = now - self.phone_t
+        p, s = self.phone_cmd
+        return (f"📱 {self.phone_addr[0]} · {self._phone_state()} · {'ON' if self.phone_on else 'OFF'} · "
+                f"펄스 {signed2(p)} · 조향 {s:+d}°" + (f" · {age:.1f}s 조용" if age > wireless.PHONE_TIMEOUT_S else ""))
+
+    def describe_phone(self):
+        """콘솔(--nogui)용 한 줄 — 핫스팟 | 휴대폰."""
+        return " | ".join(t for t in (self.describe_hotspot(), self.describe_phone_link()) if t)
 
     # ── 우노 출력 → 화면 ─────────────────────────────────────────────────────
     def cb_enc(self, msg: Float64MultiArray):
@@ -376,19 +517,25 @@ class JoyNode(Node):
 
     def describe_cmd(self):
         """화면 · 콘솔용 한 줄 — 지금 /cmd_vel 을 어떻게 내고 있나."""
-        if self.ser is None:
-            return "발행 안 함 (조이스틱 미연결)"
-        if not self.data_since_open:
-            return "발행 안 함 — 보드 줄 기다리는 중 (열면 보드가 리셋된다)"
+        src = self.source
+        if src is None:
+            if self.ser is not None and not self.data_since_open:
+                return "발행 안 함 — 보드 줄 기다리는 중 (열면 보드가 리셋된다)"
+            if self.ser is not None:
+                return "발행 안 함 — 보드에서 줄이 안 온다"
+            return "발행 안 함 (조이스틱 미연결 · 휴대폰 없음)"
+        if src == 'phone' and not self.phone_armed:
+            return "📱 발행 안 함 — 휴대폰 앱이 OFF 를 한 번 보내야 ON 을 받는다"
         if not self.on:
-            return "발행 안 함 — SWA OFF (스틱 무시)"
-        if self.calibrating():
+            return "📱 발행 안 함 — 휴대폰 OFF" if src == 'phone' else "발행 안 함 — SWA OFF (스틱 무시)"
+        if src == 'joy' and self.calibrating():
             return "영점 보정 중 — 0 으로 본다"
+        mark = "📱 " if src == 'phone' else ""
         if self.engaged:
-            return f"[{self.cmd[0]}, {self.cmd[1]}]  (REF {signed2(self.cmd[0])} · 조향 {self.cmd[1]:+d}°)"
+            return mark + f"[{self.cmd[0]}, {self.cmd[1]}]  (REF {signed2(self.cmd[0])} · 조향 {self.cmd[1]:+d}°)"
         if self.tail_until is not None:
-            return "[0, 0] 마무리"
-        return "발행 안 함 — 스틱 가운데"
+            return mark + "[0, 0] 마무리"
+        return mark + "발행 안 함 — 스틱 가운데"
 
     def shutdown(self):
         self.stop_evt.set()
@@ -398,6 +545,10 @@ class JoyNode(Node):
         with self.ser_lock:
             if self.ser is not None:
                 boards.close_quietly(self.ser)
+        if self.udp is not None:
+            self.udp.close()
+        if self.hotspot is not None:
+            self.hotspot.down()              # 핫스팟을 내린다 (최대 wireless.DOWN_TIMEOUT_S)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -431,11 +582,22 @@ class JoyWindow:
         self.j318_label.pack(fill=tk.X)
         self.fb_label = tk.Label(info, text="", bg=BG, fg=TEXT, font=("Consolas", 12), anchor="w")
         self.fb_label.pack(fill=tk.X)
+        # 휴대폰 무선 조종 — 핫스팟 · 휴대폰을 따로 한 줄씩 (한 줄에 몰면 길어져 창이 늘었다 줄었다 한다)
+        self.hotspot_label = tk.Label(info, text="", bg=BG, fg=TEXT, font=("Consolas", 11), anchor="w")
+        self.hotspot_label.pack(fill=tk.X)
+        self.phone_label = tk.Label(info, text="", bg=BG, fg=TEXT, font=("Consolas", 11), anchor="w")
+        self.phone_label.pack(fill=tk.X)
         bottom = tk.Frame(root, bg=BG)
         bottom.pack(fill=tk.X, padx=16, pady=(4, 10))
-        self.status = tk.Label(bottom, text="", bg=BG, fg=TEXT, font=("Consolas", 10))
-        self.status.pack(side=tk.LEFT)
+        self.status = tk.Label(bottom, text="", bg=BG, fg=TEXT, font=("Consolas", 10), anchor="w")
+        self.status.pack(fill=tk.X)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        # ★창 크기를 처음 배치(글자 비운 상태 — 패드 줄이 너비를 정한다)로 고정★ — 아래 글자 길이가 바뀌어도
+        # 창이 늘었다 줄었다(움직였다) 하지 않는다. 넘치는 글자는 오른쪽이 잘린다 (2026-11-23 사용자 지적)
+        root.update_idletasks()
+        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
+        root.geometry(f"{w}x{h}")
+        root.minsize(w, h)
         self._update()
 
     def _make_pad(self, parent, label, column, highlight):
@@ -463,7 +625,8 @@ class JoyWindow:
         tk = self.tk
         frame = tk.Frame(parent, bg=BG)
         frame.grid(row=0, column=1, padx=12)
-        self.on_label = tk.Label(frame, text="OFF", bg=BG, fg=PRESS_COLOR, font=("Consolas", 22, "bold"))
+        self.on_label = tk.Label(frame, text="OFF", bg=BG, fg=PRESS_COLOR, font=("Consolas", 22, "bold"),
+                                 width=3)                   # OFF ↔ ON 으로 가운데 줄 폭이 바뀌어 패드가 밀리지 않게
         self.on_label.pack(pady=(0, 10))
         row = tk.Frame(frame, bg=BG)
         row.pack()
@@ -478,16 +641,23 @@ class JoyWindow:
             self.sw_ids[name] = (c, oid)
 
     def _update_pad(self, pad, x_raw, y_raw, k, cx, cy):
-        sx = axis_to_screen(normalize(x_raw, cx))
-        sy = axis_to_screen(normalize(y_raw, cy))
+        """실물 조이스틱 값으로 패드를 그린다."""
+        self._draw_pad(pad, normalize(x_raw, cx), normalize(y_raw, cy), k == 0, f"X:{x_raw:4d} Y:{y_raw:4d}", DOT_COLOR)
+
+    def _draw_pad(self, pad, nx, ny, pressed, text, color):
+        """nx · ny : −1 ~ 1 (+ = 왼쪽 · 위 — 아날로그 1023 쪽, normalize 와 같은 방향)."""
+        sx = axis_to_screen(nx)
+        sy = axis_to_screen(ny)
         c = pad["canvas"]
         c.coords(pad["dot"], sx - DOT_R, sy - DOT_R, sx + DOT_R, sy + DOT_R)
         if pad["highlight"] == "h":
             c.coords(pad["hi_line"], 0, sy, PAD, sy)
         else:
             c.coords(pad["hi_line"], sx, 0, sx, PAD)
-        c.itemconfig(pad["k"], fill=PRESS_COLOR if k == 0 else "")
-        pad["label"].config(text=f"X:{x_raw:4d} Y:{y_raw:4d}")
+        c.itemconfig(pad["dot"], fill=color)
+        c.itemconfig(pad["hi_line"], fill=color)
+        c.itemconfig(pad["k"], fill=PRESS_COLOR if pressed else "")
+        pad["label"].config(text=text)
 
     def _update(self):
         n = self.node
@@ -495,17 +665,28 @@ class JoyWindow:
             x1, y1, k1, x2, y2, k2, swa, swb, _ = n.data
             c = dict(n.center)
             on, cmd_text, status = n.on, n.describe_cmd(), n.current_status()
-            j318 = n.on and n.ser is not None
+            j318 = n.on
             port = n.port
-        self._update_pad(self.pad_l, x1, y1, k1, c["x1"], c["y1"])
-        self._update_pad(self.pad_r, x2, y2, k2, c["x2"], c["y2"])
+            phone_src, phone_cmd = n.source == 'phone', n.phone_cmd
+            hotspot_text, phone_text = n.describe_hotspot(), n.describe_phone_link()
+        if phone_src:
+            # 휴대폰이 조종하는 동안 — 휴대폰이 보낸 값을 패드에 그린다 (보라색). 실물 조이스틱 줄은 오지 않는다.
+            # L 세로 = 목표 펄스(위 +), R 가로 = 조향(오른쪽 +) — 실물 스틱을 그만큼 민 것처럼 (stick_to_command 의 거꾸로)
+            p, s = phone_cmd
+            self._draw_pad(self.pad_l, 0.0, p / boards.PULSE_MAX, False, f"📱 펄스 {signed2(p)}", PHONE_COLOR)
+            self._draw_pad(self.pad_r, -s / boards.STEER_MAX, 0.0, False, f"📱 조향 {s:+d}°", PHONE_COLOR)
+        else:
+            self._update_pad(self.pad_l, x1, y1, k1, c["x1"], c["y1"])
+            self._update_pad(self.pad_r, x2, y2, k2, c["x2"], c["y2"])
         for name, value in (("SWA", swa), ("SWB", swb)):
             cv, oid = self.sw_ids[name]
             cv.itemconfig(oid, fill=PRESS_COLOR if value == 0 else IDLE_COLOR)
         self.on_label.config(text="ON" if on else "OFF", fg=OK_COLOR if on else PRESS_COLOR)
         self.cmd_label.config(text=f"/cmd_vel : {cmd_text}")
-        self.j318_label.config(text="/joy318 : 발행 중 (SWA ON — 자율주행 정지 · 출발 거절)" if j318
-                               else "/joy318 : 안 냄", fg=WARN_COLOR if j318 else TEXT)
+        self.j318_label.config(text=f"/joy318 : 발행 중 ({'휴대폰' if phone_src else 'SWA'} ON — 자율주행 정지 · 출발 거절)"
+                               if j318 else "/joy318 : 안 냄", fg=WARN_COLOR if j318 else TEXT)
+        self.hotspot_label.config(text=hotspot_text)
+        self.phone_label.config(text=phone_text, fg=PHONE_COLOR if phone_src else TEXT)
         if n.estop:
             self.cmd_label.config(text="🛑 E-STOP 중 — arduino 가 /cmd_vel 을 막는다 (웹 · 채팅방에서 GO 로 해제)",
                                   fg=PRESS_COLOR)
@@ -531,7 +712,7 @@ def run_nogui(node, stop):
             last_lines = node.joy_lines
             text = (("🛑 E-STOP | " if node.estop else "")
                     + f"{'ON ' if node.on else 'OFF'} /cmd_vel {node.describe_cmd()} | 보드 {lines}줄/s | "
-                    f"{node.current_status()[0]}")
+                    f"{node.current_status()[0]} | {node.describe_phone()}")
         fb = node.fb if node.fb_fresh() else None
         text += f" | /enc_pot {fb[0]:+.0f} {fb[1]:+.0f}° 실측 {fb[2]:+.0f} {fb[3]:+.1f}°" if fb else " | /enc_pot ---"
         print(text, flush=True)

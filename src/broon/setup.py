@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.json')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        # 휴대폰 무선 조종 핫스팟 — 도우미 broon-ap · 처음 한 번 setup_hotspot.sh (broon/wireless.py 머리말)
+        (os.path.join('share', package_name, 'hotspot'), ['hotspot/broon-ap', 'hotspot/setup_hotspot.sh']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

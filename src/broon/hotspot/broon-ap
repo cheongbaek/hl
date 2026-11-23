@@ -1,0 +1,131 @@
+#!/bin/bash
+# =====================================================================================
+# broon-ap ― broon joy 노드의 Wi-Fi 핫스팟 도우미  (2026-11-23)
+# =====================================================================================
+# root 로 돈다. setup_hotspot.sh 가 /usr/local/sbin/broon-ap 로 깔고 sudoers 로 그 사용자에게만 비밀번호 없이 허락한다.
+# joy 노드(broon/wireless.py)가 `sudo -n /usr/local/sbin/broon-ap up <SSID> <비밀번호>` · down · status 로 부른다.
+#
+# ★핫스팟이 켜진 동안 이 PC 의 Wi-Fi 접속(무선 인터넷)은 끊긴다★ — 무선칩을 핫스팟 전용으로 쓴다 (2026-11-23 사용자 지정).
+#   인터넷은 유선 · 테더링으로 받는다. 내리면(down) NetworkManager 가 원래 Wi-Fi 에 다시 붙는다(그 연결의 자동 연결).
+#   처음 설계(같은 칩에 가상 AP 인터페이스를 더 만들어 인터넷 Wi-Fi 와 동시에)는 2026-11-23 실기에서 안 됐다 —
+#   NetworkManager 가 새 인터페이스를 wpa_supplicant 에 넘기면 managed 로 바꿔 올리는데, AX211 은 managed 를 하나만 허락해
+#   "Device or resource busy" 로 실패했다. 동시에 하려면 NetworkManager 밖에서 hostapd 를 돌려야 한다 — 하지 않았다.
+#
+#   up <ssid> <psk>  NetworkManager 의 Wi-Fi 장치에 연결 CON 을 만들어 올린다 —
+#                    AP · WPA2-PSK(RSN · CCMP) · 공유 10.42.0.1/24 (DHCP 는 NetworkManager 가 띄우는 dnsmasq).
+#                    대역 후보 : 5 GHz 36 → 5 GHz 149 → 2.4 GHz 6 (DFS 채널은 쓰지 않는다).
+#                    성공하면 마지막 줄 "OK <band a|bg> <채널> <장치>", 실패하면 "ERR ..." 와 종료 코드 1.
+#   down             연결을 내리고 지운다. 'up' 이 아직 도는 중이면 그것부터 멈춘다
+#                    (joy 가 켜지자마자 끝나도 up 이 다음 후보로 연결을 다시 만들어 핫스팟이 남지 않게).
+#   status           켜져 있으면 "ON <band> <채널> <장치>" 와 0, 아니면 "OFF" 와 3.
+# 값은 broon/wireless.py 와 같아야 한다 : AP_ADDR = AP_IP/24.
+set -u
+CON=broon-ap
+AP_ADDR=10.42.0.1/24
+OLD_IFACE=broonap0          # 처음 설계의 가상 인터페이스 — 남아 있으면 지운다
+UP_PID=/run/broon-ap.up.pid # 돌고 있는 'up' 의 PID — down 이 멈출 때 쓴다
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+die() { echo "ERR $*"; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "root 로 돌려야 한다 (sudo)"
+command -v nmcli >/dev/null 2>&1 || die "nmcli(NetworkManager) 가 없다"
+
+wifi_dev() {   # NetworkManager 의 첫 Wi-Fi 장치 (옛 가상 인터페이스는 빼고)
+    nmcli -t -f DEVICE,TYPE device status 2>/dev/null \
+        | awk -F: -v old="$OLD_IFACE" '$2 == "wifi" && $1 != old {print $1; exit}'
+}
+
+drop_old_iface() {
+    if [ -e "/sys/class/net/$OLD_IFACE" ] && command -v iw >/dev/null 2>&1; then
+        iw dev "$OLD_IFACE" del >/dev/null 2>&1
+    fi
+}
+
+stop_up() {   # 다른 'up' 이 돌고 있으면 그 자식(nmcli · timeout)과 함께 멈춘다
+    local pid i
+    [ -s "$UP_PID" ] || return 0
+    pid=$(cat "$UP_PID" 2>/dev/null)
+    if [ -n "$pid" ] && [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null \
+            && grep -qa broon-ap "/proc/$pid/cmdline" 2>/dev/null; then
+        pkill -TERM -P "$pid" 2>/dev/null
+        kill -TERM "$pid" 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.2
+        done
+        kill -KILL "$pid" 2>/dev/null
+    fi
+    rm -f "$UP_PID"
+}
+
+con_active() {
+    nmcli -t -f GENERAL.STATE connection show "$CON" 2>/dev/null | grep -q activated
+}
+
+con_summary() {   # "<band> <채널> <장치>"
+    local band ch dev
+    band=$(nmcli -g 802-11-wireless.band connection show "$CON" 2>/dev/null)
+    ch=$(nmcli -g 802-11-wireless.channel connection show "$CON" 2>/dev/null)
+    dev=$(nmcli -g GENERAL.DEVICES connection show "$CON" 2>/dev/null)
+    echo "${band:-?} ${ch:-?} ${dev:-?}"
+}
+
+do_up() {
+    local ssid=${1:-} psk=${2:-} dev c band ch
+    [ -n "$ssid" ] && [ ${#ssid} -le 32 ] || die "SSID 는 1 ~ 32 자"
+    [ ${#psk} -ge 8 ] && [ ${#psk} -le 63 ] || die "비밀번호는 8 ~ 63 자"
+    if con_active; then
+        echo "OK $(con_summary)"
+        exit 0
+    fi
+    stop_up                                  # 앞서 남은 up 이 있으면 (나중 것이 이긴다)
+    echo $$ > "$UP_PID"
+    trap 'rm -f "$UP_PID"' EXIT
+    drop_old_iface
+    dev=$(wifi_dev)
+    [ -n "$dev" ] || die "Wi-Fi 장치가 없다"
+    nmcli radio wifi on >/dev/null 2>&1     # 무선이 꺼져 있으면 AP 도 못 띄운다
+
+    for c in "a 36" "a 149" "bg 6"; do
+        band=${c% *}; ch=${c#* }
+        nmcli connection delete "$CON" >/dev/null 2>&1
+        nmcli connection add type wifi ifname "$dev" con-name "$CON" autoconnect no ssid "$ssid" \
+            802-11-wireless.mode ap 802-11-wireless.band "$band" 802-11-wireless.channel "$ch" \
+            ipv4.method shared ipv4.addresses "$AP_ADDR" ipv6.method disabled \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" wifi-sec.proto rsn \
+            wifi-sec.pairwise ccmp wifi-sec.group ccmp >/dev/null 2>&1 \
+            || die "nmcli connection add 실패"
+        if timeout 30 nmcli --wait 25 connection up "$CON" ifname "$dev" >/dev/null 2>&1; then
+            echo "OK $band $ch $dev"
+            exit 0
+        fi
+        echo "TRY $band ${ch}ch 실패 — 다음 후보"
+    done
+    nmcli connection delete "$CON" >/dev/null 2>&1
+    die "핫스팟을 못 켰다 (장치 $dev — 5 GHz 36 · 149, 2.4 GHz 6 모두 실패)"
+}
+
+do_down() {
+    stop_up
+    nmcli connection down "$CON" >/dev/null 2>&1
+    nmcli connection delete "$CON" >/dev/null 2>&1
+    drop_old_iface
+    echo "OK down"
+}
+
+do_status() {
+    if con_active; then
+        echo "ON $(con_summary)"
+        exit 0
+    fi
+    echo "OFF"
+    exit 3
+}
+
+case "${1:-}" in
+    up)     shift; do_up "$@" ;;
+    down)   do_down ;;
+    status) do_status ;;
+    *)      die "쓰는 법: broon-ap up <ssid> <psk> | down | status" ;;
+esac
